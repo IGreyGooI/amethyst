@@ -15,24 +15,25 @@ use rendy::{
 use shred::{DispatcherBuilder, Resources, RunNow};
 
 #[derive(Debug)]
-pub struct DataDrivenRenderGroup<'a, B, T>
+pub struct DataDrivenRenderGroup<B, T>
 where
     B: Backend,
     T: PipelineListResolver,
 {
     resolver: T,
     systems: Vec<PipelineEncodingSystem<B>>,
-    pso_desc_builder: PsoDescBuilder<'a, B>,
+    pso_desc_builder: PsoDescBuilder,
 }
 
 impl<B: Backend, T: PipelineListResolver> RenderGroup<B, Resources>
-    for DataDrivenRenderGroup<'_, B, T>
+    for DataDrivenRenderGroup<B, T>
 {
     fn prepare(
         &mut self,
         factory: &Factory<B>,
         queue: QueueId,
         index: usize,
+        _subpass: gfx_hal::pass::Subpass<'_, B>,
         res: &Resources,
     ) -> PrepareResult {
         // TODO: don't do that every frame, obviously
@@ -47,7 +48,13 @@ impl<B: Backend, T: PipelineListResolver> RenderGroup<B, Resources>
         PrepareResult::DrawRecord
     }
 
-    fn draw_inline(&mut self, encoder: RenderPassEncoder<'_, B>, index: usize, res: &Resources) {
+    fn draw_inline(
+        &mut self,
+        mut encoder: RenderPassEncoder<'_, B>,
+        _index: usize,
+        subpass: gfx_hal::pass::Subpass<'_, B>,
+        res: &Resources,
+    ) {
         // TODO: don't build the dispatcher every frame
         {
             let mut builder = DispatcherBuilder::new();
@@ -57,10 +64,10 @@ impl<B: Backend, T: PipelineListResolver> RenderGroup<B, Resources>
             builder.build().run_now(res);
         }
 
-        for system in &self.systems {
+        for system in self.systems.iter_mut() {
             system
-                .pipeline()
-                .draw_inline(&mut encoder, &self.pso_desc_builder);
+                .pipeline_mut()
+                .draw_inline(&mut encoder, &self.pso_desc_builder, subpass);
         }
 
         unimplemented!()
@@ -72,13 +79,12 @@ impl<B: Backend, T: PipelineListResolver> RenderGroup<B, Resources>
 }
 
 #[derive(Debug)]
-pub struct PsoDescBuilder<'a, B: Backend> {
+pub struct PsoDescBuilder {
     baked_states: BakedStates,
-    subpass: Subpass<'a, B>,
 }
 
-impl<'a, B: Backend> PsoDescBuilder<'a, B> {
-    pub fn new(subpass: Subpass<'a, B>, framebuffer_width: u32, framebuffer_height: u32) -> Self {
+impl PsoDescBuilder {
+    pub fn new(framebuffer_width: u32, framebuffer_height: u32) -> Self {
         let rect = gfx_hal::pso::Rect {
             x: 0,
             y: 0,
@@ -96,14 +102,14 @@ impl<'a, B: Backend> PsoDescBuilder<'a, B> {
                 blend_color: None,
                 depth_bounds: None,
             },
-            subpass,
         }
     }
 
-    pub fn build(
+    pub fn build<'a, B: Backend>(
         &self,
         shader_set: GraphicsShaderSet<'a, B>,
         pipeline_layout: &'a B::PipelineLayout,
+        subpass: Subpass<'a, B>,
     ) -> GraphicsPipelineDesc<'a, B> {
         GraphicsPipelineDesc {
             shaders: shader_set,
@@ -134,7 +140,7 @@ impl<'a, B: Backend> PsoDescBuilder<'a, B> {
             multisampling: None,
             baked_states: self.baked_states.clone(),
             layout: &pipeline_layout,
-            subpass: self.subpass.clone(),
+            subpass,
             flags: gfx_hal::pso::PipelineCreationFlags::empty(),
             parent: gfx_hal::pso::BasePipeline::None,
         }
@@ -188,21 +194,21 @@ where
         self.depth
     }
 
-    fn build<'a, 's>(
+    fn build<'a>(
         self,
         _factory: &mut Factory<B>,
         _queue: QueueId,
         _aux: &mut Resources,
         framebuffer_width: u32,
         framebuffer_height: u32,
-        subpass: gfx_hal::pass::Subpass<'s, B>,
+        _subpass: gfx_hal::pass::Subpass<'_, B>,
         _buffers: Vec<NodeBuffer<'a, B>>,
         _images: Vec<NodeImage<'a, B>>,
-    ) -> Result<Box<dyn RenderGroup<B, Resources> + 's>, failure::Error> {
+    ) -> Result<Box<dyn RenderGroup<B, Resources>>, failure::Error> {
         Ok(Box::new(DataDrivenRenderGroup {
             resolver: self.resolver,
             systems: Vec::new(),
-            pso_desc_builder: PsoDescBuilder::new(subpass, framebuffer_width, framebuffer_height),
+            pso_desc_builder: PsoDescBuilder::new(framebuffer_width, framebuffer_height),
         }))
     }
 }

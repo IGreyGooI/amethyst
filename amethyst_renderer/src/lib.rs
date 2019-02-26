@@ -27,6 +27,9 @@
 #![doc(html_logo_url = "https://www.amethyst.rs/assets/amethyst.svg")]
 #![warn(missing_docs, rust_2018_idioms, rust_2018_compatibility)]
 
+pub use gfx_hal;
+pub use rendy;
+
 pub use crate::{
     blink::{Blink, BlinkSystem},
     bundle::RenderBundle,

@@ -184,9 +184,11 @@ impl<B: Backend> EncoderPipeline<B> {
     pub fn draw_inline(
         &mut self,
         encoder: &mut RenderPassEncoder<'_, B>,
-        pso_desc_builder: &PsoDescBuilder<'_, B>,
+        pso_desc_builder: &PsoDescBuilder,
+        subpass: gfx_hal::pass::Subpass<'_, B>,
     ) {
-        let gfx_pipeline = pso_desc_builder.build(self.shader_set(), self.pipeline_layout());
+        let gfx_pipeline =
+            pso_desc_builder.build(self.shader_set(), self.pipeline_layout(), subpass);
     }
 
     fn entities_iter<'a>(&'a self) -> impl Iterator<Item = u32> + 'a {
@@ -246,6 +248,7 @@ pub struct EncodingLayout {
     pub batch_buffer: BufferLayout,
     pub batch_descriptors: DescriptorsLayout,
     pub instances_buffer: BufferLayout,
+    pub instances_vertex_buffer: BufferLayout,
 }
 
 impl EncodingLayout {
@@ -260,6 +263,24 @@ impl EncodingLayout {
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct DescriptorsLayout {
     pub props: Vec<EncodedProp>,
+}
+
+pub struct ShaderSetLayout {
+    pub buffers: Vec<ShaderBufferDesc>,
+    // pub textures: Vec<TODO>,
+}
+
+pub enum ShaderBufferDesc {
+    Ubo {
+        set: u32,
+        binding: u32,
+        name: String,
+        layout: BufferLayout,
+    },
+    Vbo {
+        name: String,
+        layout: BufferLayout,
+    },
 }
 
 /// A set of shader properties at specific offsets.
@@ -485,8 +506,8 @@ impl<B: Backend> PipelineEncodingSystem<B> {
         &self.pipeline.encoders
     }
 
-    pub fn pipeline(&self) -> &EncoderPipeline<B> {
-        &self.pipeline
+    pub fn pipeline_mut(&mut self) -> &mut EncoderPipeline<B> {
+        &mut self.pipeline
     }
 }
 
@@ -627,25 +648,13 @@ impl<'t, 'a, B: Backend> System<'a> for &'t mut PipelineEncodingSystem<B> {
             instances_buffer_size / 2, // allocate extra 50% on top
         );
 
-        if self
-            .pipeline
-            .globals_buffer
-            .filter(|b| b.size() < globals_buffer_size)
-            .is_none()
-        {
-            self.pipeline.globals_buffer.replace(
-                factory
-                    .create_buffer(1, globals_buffer_size, UniformBuffer)
-                    .unwrap(),
-            );
-        }
-
         // 4. reencode dirty globals
         if let Some(buffer) = &mut self.pipeline.globals_buffer {
             let buffer_layout = &self.pipeline.layout.globals_buffer;
             let descs_layout = &self.pipeline.layout.globals_descriptors;
             let descriptors = &mut self.pipeline.globals_descriptors;
             let enc = &self.pipeline.encoders.globals;
+            let encoders_data = &encoders_data.globals;
             with_buffer_write(
                 buffer,
                 factory.device(),
@@ -657,7 +666,7 @@ impl<'t, 'a, B: Backend> System<'a> for &'t mut PipelineEncodingSystem<B> {
                         raw_buffer,
                         descriptors,
                     );
-                    for (encoder, data) in enc.iter().zip(encoders_data.globals) {
+                    for (encoder, data) in enc.iter().zip(encoders_data) {
                         unsafe {
                             encoder.encode(&data, &globals_buf);
                         }
@@ -673,6 +682,7 @@ impl<'t, 'a, B: Backend> System<'a> for &'t mut PipelineEncodingSystem<B> {
             let descs_layout = &self.pipeline.layout.batch_descriptors;
             let descriptors = &mut self.pipeline.batch_descriptors;
             let enc = &self.pipeline.encoders.batch;
+            let encoders_data = &encoders_data.batch;
             let writes = &self.encoder_batch_writes;
             with_buffer_write(
                 buffer,
@@ -685,7 +695,7 @@ impl<'t, 'a, B: Backend> System<'a> for &'t mut PipelineEncodingSystem<B> {
                         raw_buffer,
                         descriptors,
                     );
-                    for (encoder, data) in enc.iter().zip(encoders_data.batch) {
+                    for (encoder, data) in enc.iter().zip(encoders_data) {
                         unsafe {
                             encoder.encode(writes, &data, &batch_buf);
                         }
@@ -699,6 +709,7 @@ impl<'t, 'a, B: Backend> System<'a> for &'t mut PipelineEncodingSystem<B> {
         if let Some(buffer) = &mut self.pipeline.instances_buffer {
             let buffer_layout = &self.pipeline.layout.instances_buffer;
             let enc = &self.pipeline.encoders.instance;
+            let encoders_data = &encoders_data.instance;
             let writes = self.encoder_instance_writes.as_ref().unwrap();
             with_buffer_write(
                 buffer,
@@ -711,9 +722,9 @@ impl<'t, 'a, B: Backend> System<'a> for &'t mut PipelineEncodingSystem<B> {
                         raw_buffer,
                         &mut [],
                     );
-                    for (encoder, data) in enc.iter().zip(encoders_data.instance) {
+                    for (encoder, encoder_data) in enc.iter().zip(encoders_data) {
                         unsafe {
-                            encoder.encode(writes, &data, &instances_buf);
+                            encoder.encode(writes, &encoder_data, &instances_buf);
                         }
                     }
                 },

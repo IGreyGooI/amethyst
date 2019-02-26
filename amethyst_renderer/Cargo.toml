@@ -21,10 +21,10 @@ travis-ci = { repository = "amethyst/amethyst" }
 
 [features]
 default = ["opengl"]
-dx12 = ["rendy/dx12"]
-metal = ["rendy/metal"]
+# dx12 = ["rendy/dx12"]
+# metal = ["rendy/metal"]
 opengl = ["gfx_device_gl", "gfx_window_glutin", "glutin"]
-vulkan = ["rendy/vulkan"]
+# vulkan = ["rendy/vulkan"]
 profiler = [ "thread_profiler/thread_profiler" ]
 nightly = [ "amethyst_core/nightly" ]
 

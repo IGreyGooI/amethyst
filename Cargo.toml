@@ -90,6 +90,9 @@ env_logger = "0.5.13"
 genmesh = "0.6"
 ron = "0.4"
 specs-derive = "0.4"
+rand = "0.6.5"
+lazy_static = "1.2.0"
+failure = "0.1.5"
 
 [build-dependencies]
 vergen = "3.0"
