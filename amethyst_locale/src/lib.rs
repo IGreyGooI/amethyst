@@ -2,24 +2,34 @@
 //!
 //! Localisation binding a `Fluent` file to an Asset<Locale> via the use of amethyst_assets.
 
-#![warn(missing_docs, rust_2018_idioms, rust_2018_compatibility)]
+#![warn(
+    missing_debug_implementations,
+    missing_docs,
+    rust_2018_idioms,
+    rust_2018_compatibility
+)]
+#![warn(clippy::all)]
+#![allow(clippy::new_without_default)]
 
-use fluent::bundle::FluentBundle;
-
-use amethyst_assets::{Asset, Handle, ProcessingState, SimpleFormat};
-use amethyst_core::specs::prelude::VecStorage;
+use amethyst_assets::{Asset, Format, Handle};
+use amethyst_core::ecs::prelude::VecStorage;
 use amethyst_error::Error;
+use fluent::bundle::FluentBundle;
+use serde::{Deserialize, Serialize};
 
 /// Loads the strings from localisation files.
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct LocaleFormat;
 
-impl SimpleFormat<Locale> for LocaleFormat {
-    const NAME: &'static str = "FTL";
+amethyst_assets::register_format_type!(Locale);
 
-    type Options = ();
+amethyst_assets::register_format!("FTL", LocaleFormat as Locale);
+impl Format<Locale> for LocaleFormat {
+    fn name(&self) -> &'static str {
+        "FTL"
+    }
 
-    fn import(&self, bytes: Vec<u8>, _: ()) -> Result<Locale, Error> {
+    fn import_simple(&self, bytes: Vec<u8>) -> Result<Locale, Error> {
         let s = String::from_utf8(bytes)?;
 
         let mut bundle = FluentBundle::new::<&'static str>(&[]);
@@ -30,16 +40,11 @@ impl SimpleFormat<Locale> for LocaleFormat {
     }
 }
 
-impl Into<Result<ProcessingState<Locale>, Error>> for Locale {
-    fn into(self) -> Result<ProcessingState<Locale>, Error> {
-        Ok(ProcessingState::Loaded(self))
-    }
-}
-
 /// A handle to a locale.
 pub type LocaleHandle = Handle<Locale>;
 
 /// A loaded locale.
+#[allow(missing_debug_implementations)]
 pub struct Locale {
     /// The message context.
     pub bundle: FluentBundle<'static>,

@@ -21,6 +21,7 @@
 * NCrashed (Anton Gushcha)
 * Nikita Chashchinskii
 * Oflor
+* ohnoimdead (Tres Henry)
 * Robbie Cooper
 * Scott Corbeil
 * Simon Rönnberg
@@ -28,3 +29,4 @@
 * White-Oak
 * Xaeroxe (Jacob Kiesel)
 * Telzhaak
+* Alve™ (Alve Larsson)

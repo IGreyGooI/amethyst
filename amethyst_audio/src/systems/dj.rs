@@ -5,11 +5,11 @@ use thread_profiler::profile_scope;
 
 use amethyst_assets::AssetStorage;
 use amethyst_core::{
-    shred::{Resource, Resources},
-    specs::{
+    ecs::{
         common::Errors,
         prelude::{Read, System, WriteExpect},
     },
+    shred::{Resource, Resources},
 };
 
 use crate::{
@@ -19,6 +19,7 @@ use crate::{
 };
 
 /// Calls a closure if the `AudioSink` is empty.
+#[derive(Debug)]
 pub struct DjSystem<F, R> {
     f: F,
     marker: PhantomData<R>,
@@ -52,6 +53,7 @@ where
     fn run(&mut self, (storage, errors, sink, mut res): Self::SystemData) {
         #[cfg(feature = "profiler")]
         profile_scope!("dj_system");
+
         if let Some(ref sink) = sink {
             if sink.empty() {
                 if let Some(source) = (&mut self.f)(&mut res).and_then(|h| storage.get(&h)) {
@@ -62,7 +64,7 @@ where
     }
 
     fn setup(&mut self, res: &mut Resources) {
-        use amethyst_core::specs::prelude::SystemData;
+        use amethyst_core::ecs::prelude::SystemData;
         Self::SystemData::setup(res);
         init_output(res);
     }

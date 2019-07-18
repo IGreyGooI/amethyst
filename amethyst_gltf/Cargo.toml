@@ -1,12 +1,12 @@
 [package]
 name = "amethyst_gltf"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Rhuagh <seamonr@gmail.com>"]
 edition = "2018"
 description = "GLTF asset loading"
 
-documentation = "https://www.amethyst.rs/doc/latest/doc/amethyst_gltf/"
-homepage = "https://www.amethyst.rs/"
+documentation = "https://docs-src.amethyst.rs/stable/amethyst_gltf/"
+homepage = "https://amethyst.rs/"
 repository = "https://github.com/amethyst/amethyst"
 
 license = "MIT/Apache-2.0"
@@ -16,15 +16,15 @@ appveyor = { repository = "amethyst/amethyst" }
 travis-ci = { repository = "amethyst/amethyst" }
 
 [dependencies]
-amethyst_assets = { path = "../amethyst_assets/", version = "0.6.0" }
-amethyst_animation = { path = "../amethyst_animation/", version = "0.5.0" }
-amethyst_renderer = { path = "../amethyst_renderer/", version = "0.10.0" }
-amethyst_core = { path = "../amethyst_core/", version = "0.5.0" }
+amethyst_assets = { path = "../amethyst_assets/", version = "0.7.0" }
+amethyst_animation = { path = "../amethyst_animation/", version = "0.6.0" }
+amethyst_core = { path = "../amethyst_core/", version = "0.6.0" }
 amethyst_error = { path = "../amethyst_error/", version = "0.1.0" }
+amethyst_rendy = { path = "../amethyst_rendy", version = "0.1.0" }
 err-derive = "0.1"
-base64 = "0.9"
+base64 = "0.10"
 fnv = "1"
-gltf = "0.11"
+gltf = "0.12"
 gfx = "0.17"
 hibitset = { version = "0.5.1", features = ["parallel"] }
 itertools = "0.7"
@@ -33,7 +33,10 @@ mikktspace = { version = "0.1" }
 serde = { version = "1.0", features = ["derive"] }
 
 thread_profiler = { version = "0.3", optional = true }
+image = "0.21.0"
+derivative = "1.0.2"
 
 [features]
 profiler = [ "thread_profiler/thread_profiler" ]
 nightly = [ "amethyst_core/nightly" ]
+float64 = ["amethyst_core/float64"]

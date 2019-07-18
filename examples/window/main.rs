@@ -1,16 +1,13 @@
 //! Opens an empty window.
 
 use amethyst::{
-    input::is_key_down,
-    prelude::*,
-    renderer::{DisplayConfig, DrawFlat, Pipeline, PosNormTex, RenderBundle, Stage},
-    utils::application_root_dir,
+    input::is_key_down, prelude::*, utils::application_root_dir, window::WindowBundle,
     winit::VirtualKeyCode,
 };
 
-struct Example;
+struct ExampleState;
 
-impl SimpleState for Example {
+impl SimpleState for ExampleState {
     fn handle_event(
         &mut self,
         _: StateData<'_, GameData<'_, '_>>,
@@ -31,19 +28,13 @@ impl SimpleState for Example {
 fn main() -> amethyst::Result<()> {
     amethyst::start_logger(Default::default());
 
-    let path = application_root_dir()?.join("examples/window/resources/display_config.ron");
-    let config = DisplayConfig::load(&path);
+    let app_root = application_root_dir()?;
+    let display_config_path = app_root.join("examples/window/resources/display_config.ron");
 
-    let pipe = Pipeline::build().with_stage(
-        Stage::with_backbuffer()
-            .clear_target([0.00196, 0.23726, 0.21765, 1.0], 1.0)
-            .with_pass(DrawFlat::<PosNormTex>::new()),
-    );
+    let game_data = GameDataBuilder::default()
+        .with_bundle(WindowBundle::from_config_path(display_config_path))?;
 
-    let game_data =
-        GameDataBuilder::default().with_bundle(RenderBundle::new(pipe, Some(config)))?;
-    let mut game = Application::new("./", Example, game_data)?;
-
+    let mut game = Application::new("./", ExampleState, game_data)?;
     game.run();
 
     Ok(())

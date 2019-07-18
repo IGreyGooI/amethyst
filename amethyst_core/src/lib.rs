@@ -1,15 +1,28 @@
 //! A collection of structures and functions useful across the entire amethyst project.
-
-#![warn(missing_docs, rust_2018_idioms, rust_2018_compatibility)]
+#![warn(
+    missing_debug_implementations,
+    missing_docs,
+    rust_2018_idioms,
+    rust_2018_compatibility
+)]
+#![warn(clippy::all)]
+#![allow(clippy::new_without_default)]
 
 #[cfg(all(target_os = "emscripten", not(no_threading)))]
 compile_error!("the cfg flag \"no_threading\" is required when building for emscripten");
 
+#[macro_use]
+extern crate getset;
+#[macro_use]
+extern crate derive_new;
+
+pub use alga;
 pub use approx;
-pub use nalgebra;
+pub use nalgebra as math;
+pub use num_traits as num;
 pub use shred;
 pub use shrev;
-pub use specs;
+pub use specs as ecs;
 
 use rayon;
 
@@ -25,6 +38,8 @@ pub use crate::{
 
 pub use self::{
     axis::{Axis2, Axis3},
+    hidden::{Hidden, HiddenPropagate},
+    hide_system::HideHierarchySystem,
     named::{Named, WithNamed},
 };
 
@@ -35,6 +50,8 @@ pub mod transform;
 
 mod axis;
 mod event;
+mod hidden;
+mod hide_system;
 mod named;
 mod system_ext;
 

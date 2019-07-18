@@ -6,9 +6,12 @@ use derivative::Derivative;
 
 use crate::{ecs::prelude::World, GameData, StateEvent};
 
-use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
-/// Error type for errors occurring in StateMachine
+#[cfg(feature = "profiler")]
+use thread_profiler::profile_scope;
+
+/// Error type for errors occurring in `StateMachine`
 #[derive(Debug)]
 pub enum StateError {
     NoStatesPresent,
@@ -26,6 +29,7 @@ impl Display for StateError {
 }
 
 /// State data encapsulates the data sent to all state functions from the application main loop.
+#[allow(missing_debug_implementations)]
 pub struct StateData<'a, T> {
     /// Main `World`
     pub world: &'a mut World,
@@ -58,6 +62,17 @@ pub enum Trans<T, E> {
     Switch(Box<dyn State<T, E>>),
     /// Stop and remove all states and shut down the engine.
     Quit,
+}
+impl<T, E> Debug for Trans<T, E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        match *self {
+            Trans::None => f.write_str("None"),
+            Trans::Pop => f.write_str("Pop"),
+            Trans::Push(_) => f.write_str("Push"),
+            Trans::Switch(_) => f.write_str("Switch"),
+            Trans::Quit => f.write_str("Quit"),
+        }
+    }
 }
 
 /// Event queue to trigger state `Trans` from other places than a `State`'s methods.
@@ -392,14 +407,23 @@ impl<'a, T, E: Send + Sync + 'static> StateMachine<'a, T, E> {
         let StateData { world, data } = data;
         if self.running {
             let trans = match self.state_stack.last_mut() {
-                Some(state) => state.fixed_update(StateData { world, data }),
+                Some(state) => {
+                    #[cfg(feature = "profiler")]
+                    profile_scope!("stack fixed_update");
+                    state.fixed_update(StateData { world, data })
+                }
                 None => Trans::None,
             };
-            for state in self.state_stack.iter_mut() {
+            for state in &mut self.state_stack {
+                #[cfg(feature = "profiler")]
+                profile_scope!("stack shadow_fixed_update");
                 state.shadow_fixed_update(StateData { world, data });
             }
-
-            self.transition(trans, StateData { world, data });
+            {
+                #[cfg(feature = "profiler")]
+                profile_scope!("stack fixed transition");
+                self.transition(trans, StateData { world, data });
+            }
         }
     }
 
@@ -408,14 +432,24 @@ impl<'a, T, E: Send + Sync + 'static> StateMachine<'a, T, E> {
         let StateData { world, data } = data;
         if self.running {
             let trans = match self.state_stack.last_mut() {
-                Some(state) => state.update(StateData { world, data }),
+                Some(state) => {
+                    #[cfg(feature = "profiler")]
+                    profile_scope!("stack update");
+                    state.update(StateData { world, data })
+                }
                 None => Trans::None,
             };
-            for state in self.state_stack.iter_mut() {
+            for state in &mut self.state_stack {
+                #[cfg(feature = "profiler")]
+                profile_scope!("stack shadow_update");
                 state.shadow_update(StateData { world, data });
             }
 
-            self.transition(trans, StateData { world, data });
+            {
+                #[cfg(feature = "profiler")]
+                profile_scope!("stack transition");
+                self.transition(trans, StateData { world, data });
+            }
         }
     }
 
@@ -447,8 +481,8 @@ impl<'a, T, E: Send + Sync + 'static> StateMachine<'a, T, E> {
             self.state_stack.push(state);
 
             //State was just pushed, thus pop will always succeed
-            let state = self.state_stack.last_mut().unwrap();
-            state.on_start(StateData { world, data });
+            let new_state = self.state_stack.last_mut().unwrap();
+            new_state.on_start(StateData { world, data });
         }
     }
 
@@ -463,8 +497,8 @@ impl<'a, T, E: Send + Sync + 'static> StateMachine<'a, T, E> {
             self.state_stack.push(state);
 
             //State was just pushed, thus pop will always succeed
-            let state = self.state_stack.last_mut().unwrap();
-            state.on_start(StateData { world, data });
+            let new_state = self.state_stack.last_mut().unwrap();
+            new_state.on_start(StateData { world, data });
         }
     }
 

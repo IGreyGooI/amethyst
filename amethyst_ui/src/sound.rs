@@ -1,11 +1,11 @@
 use amethyst_assets::AssetStorage;
 use amethyst_audio::{output::Output, Source, SourceHandle};
 use amethyst_core::{
-    shrev::{EventChannel, ReaderId},
-    specs::{
+    ecs::{
         prelude::{Component, DenseVecStorage},
         Read, Resources, System, SystemData, Write,
     },
+    shrev::{EventChannel, ReaderId},
 };
 
 use crate::{
@@ -13,6 +13,9 @@ use crate::{
     event_retrigger::{EventRetrigger, EventRetriggerSystem},
     EventReceiver,
 };
+
+#[cfg(feature = "profiler")]
+use thread_profiler::profile_scope;
 
 /// Provides an `EventRetriggerSystem` that will handle incoming `UiEvent`s
 /// and trigger `UiPlaySoundAction`s for entities with attached
@@ -65,7 +68,7 @@ impl EventRetrigger for UiSoundRetrigger {
 
 /// Handles any dispatches `UiPlaySoundAction`s and plays the received
 /// sounds through the set `Output`.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UiSoundSystem {
     event_reader: Option<ReaderId<UiPlaySoundAction>>,
 }
@@ -95,6 +98,9 @@ impl<'s> System<'s> for UiSoundSystem {
     }
 
     fn run(&mut self, (sound_events, audio_storage, audio_output): Self::SystemData) {
+        #[cfg(feature = "profiler")]
+        profile_scope!("ui_sound_system");
+
         let event_reader = self
             .event_reader
             .as_mut()

@@ -1,17 +1,17 @@
-use gfx_glyph::{HorizontalAlign, VerticalAlign};
+use glyph_brush::{HorizontalAlign, VerticalAlign};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "profiler")]
 use thread_profiler::profile_scope;
 
 use amethyst_core::{
-    specs::prelude::{
+    ecs::prelude::{
         BitSet, ComponentEvent, Join, ReadExpect, ReadStorage, ReaderId, Resources, System,
         WriteStorage,
     },
     HierarchyEvent, Parent, ParentHierarchy,
 };
-use amethyst_renderer::ScreenDimensions;
+use amethyst_window::ScreenDimensions;
 
 use super::UiTransform;
 
@@ -67,7 +67,7 @@ impl Anchor {
         }
     }
 
-    /// Vertical align. Used by the ui `Pass`.
+    /// Vertical align. Used by the `UiGlyphsSystem`.
     pub(crate) fn vertical_align(&self) -> VerticalAlign {
         match self {
             Anchor::TopLeft => VerticalAlign::Top,
@@ -82,7 +82,7 @@ impl Anchor {
         }
     }
 
-    /// Horizontal align. Used by the ui `Pass`.
+    /// Horizontal align. Used by the `UiGlyphsSystem`.
     pub(crate) fn horizontal_align(&self) -> HorizontalAlign {
         match self {
             Anchor::TopLeft => HorizontalAlign::Left,
@@ -119,13 +119,15 @@ pub enum Stretch {
         x_margin: f32,
         /// The margin length for the height
         y_margin: f32,
+        /// Keep the aspect ratio by adding more margin to one axis when necessary
+        keep_aspect_ratio: bool,
     },
 }
 
 /// Manages the `Parent` component on entities having `UiTransform`
 /// It does almost the same as the `TransformSystem`, but with some differences,
 /// like `UiTransform` alignment and stretching.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UiTransformSystem {
     transform_modified: BitSet,
 
@@ -144,9 +146,10 @@ impl<'a> System<'a> for UiTransformSystem {
         ReadExpect<'a, ParentHierarchy>,
     );
     fn run(&mut self, data: Self::SystemData) {
-        let (mut transforms, parents, screen_dim, hierarchy) = data;
         #[cfg(feature = "profiler")]
-        profile_scope!("ui_parent_system");
+        profile_scope!("ui_transform_system");
+
+        let (mut transforms, parents, screen_dim, hierarchy) = data;
 
         self.transform_modified.clear();
 
@@ -212,12 +215,10 @@ impl<'a> System<'a> for UiTransformSystem {
         for entity in hierarchy.all() {
             {
                 let self_dirty = self_transform_modified.contains(entity.id());
-                let parent_entity = parents
-                    .get(*entity)
-                    .expect(
-                        "Unreachable: All entities in `ParentHierarchy` should also be in `Parent`",
-                    )
-                    .entity;
+                let parent_entity = match parents.get(*entity) {
+                    Some(p) => p.entity,
+                    None => continue, // Skip this entity iteration, as its dirty
+                };
                 let parent_dirty = self_transform_modified.contains(parent_entity.id());
                 if parent_dirty || self_dirty || screen_resized {
                     let parent_transform_copy = transforms.get(parent_entity).cloned();
@@ -246,10 +247,28 @@ impl<'a> System<'a> for UiTransformSystem {
                             transform.width,
                             parent_transform_copy.pixel_height - y_margin * 2.0,
                         ),
-                        Stretch::XY { x_margin, y_margin } => (
+                        Stretch::XY {
+                            keep_aspect_ratio: false,
+                            x_margin,
+                            y_margin,
+                        } => (
                             parent_transform_copy.pixel_width - x_margin * 2.0,
                             parent_transform_copy.pixel_height - y_margin * 2.0,
                         ),
+                        Stretch::XY {
+                            keep_aspect_ratio: true,
+                            x_margin,
+                            y_margin,
+                        } => {
+                            let scale = f32::min(
+                                (parent_transform_copy.pixel_width - x_margin * 2.0)
+                                    / transform.width,
+                                (parent_transform_copy.pixel_height - y_margin * 2.0)
+                                    / transform.height,
+                            );
+
+                            (transform.width * scale, transform.height * scale)
+                        }
                     };
                     transform.width = new_size.0;
                     transform.height = new_size.1;
@@ -271,6 +290,9 @@ impl<'a> System<'a> for UiTransformSystem {
                                 transform.height * parent_transform_copy.pixel_height;
                         }
                     }
+                    let pivot_norm = transform.pivot.norm_offset();
+                    transform.pixel_x += transform.pixel_width * -pivot_norm.0;
+                    transform.pixel_y += transform.pixel_height * -pivot_norm.1;
                 }
             }
             // Populate the modifications we just did.
@@ -297,7 +319,7 @@ impl<'a> System<'a> for UiTransformSystem {
     }
 
     fn setup(&mut self, res: &mut Resources) {
-        use amethyst_core::specs::prelude::SystemData;
+        use amethyst_core::ecs::prelude::SystemData;
         Self::SystemData::setup(res);
         self.parent_events_id = Some(res.fetch_mut::<ParentHierarchy>().track());
         let mut transforms = WriteStorage::<UiTransform>::fetch(res);
@@ -319,10 +341,26 @@ where
             Stretch::NoStretch => (transform.width, transform.height),
             Stretch::X { x_margin } => (screen_dim.width() - x_margin * 2.0, transform.height),
             Stretch::Y { y_margin } => (transform.width, screen_dim.height() - y_margin * 2.0),
-            Stretch::XY { x_margin, y_margin } => (
+            Stretch::XY {
+                keep_aspect_ratio: false,
+                x_margin,
+                y_margin,
+            } => (
                 screen_dim.width() - x_margin * 2.0,
                 screen_dim.height() - y_margin * 2.0,
             ),
+            Stretch::XY {
+                keep_aspect_ratio: true,
+                x_margin,
+                y_margin,
+            } => {
+                let scale = f32::min(
+                    (screen_dim.width() - x_margin * 2.0) / transform.width,
+                    (screen_dim.height() - y_margin * 2.0) / transform.height,
+                );
+
+                (transform.width * scale, transform.height * scale)
+            }
         };
         transform.width = new_size.0;
         transform.height = new_size.1;
@@ -340,5 +378,8 @@ where
                 transform.pixel_height = transform.height * screen_dim.height();
             }
         }
+        let pivot_norm = transform.pivot.norm_offset();
+        transform.pixel_x += transform.pixel_width * -pivot_norm.0;
+        transform.pixel_y += transform.pixel_height * -pivot_norm.1;
     }
 }

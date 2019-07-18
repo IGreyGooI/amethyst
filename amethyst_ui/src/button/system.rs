@@ -1,22 +1,21 @@
 use amethyst_core::{
+    ecs::{Entity, ReadExpect, Resources, System, SystemData, Write, WriteStorage},
     shrev::{EventChannel, ReaderId},
-    specs::{Entity, ReadExpect, Resources, System, SystemData, Write, WriteStorage},
     ParentHierarchy,
 };
-use amethyst_renderer::TextureHandle;
+use std::{collections::HashMap, fmt::Debug};
 
-use std::collections::HashMap;
+use crate::{UiButtonAction, UiButtonActionType::*, UiImage, UiText};
 
-use crate::{UiButtonAction, UiButtonActionType::*, UiText};
-
-struct ActionChangeStack<T: Clone + PartialEq> {
+#[derive(Debug)]
+struct ActionChangeStack<T: Debug + Clone + PartialEq> {
     initial_value: T,
     stack: Vec<T>,
 }
 
 impl<T> ActionChangeStack<T>
 where
-    T: Clone + PartialEq,
+    T: Debug + Clone + PartialEq,
 {
     pub fn new(initial_value: T) -> Self {
         ActionChangeStack {
@@ -58,10 +57,10 @@ where
 /// when necessary.
 ///
 /// It's automatically registered with the `UiBundle`.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct UiButtonSystem {
     event_reader: Option<ReaderId<UiButtonAction>>,
-    set_textures: HashMap<Entity, ActionChangeStack<TextureHandle>>,
+    set_images: HashMap<Entity, ActionChangeStack<UiImage>>,
     set_text_colors: HashMap<Entity, ActionChangeStack<[f32; 4]>>,
 }
 
@@ -74,7 +73,7 @@ impl UiButtonSystem {
 
 impl<'s> System<'s> for UiButtonSystem {
     type SystemData = (
-        WriteStorage<'s, TextureHandle>,
+        WriteStorage<'s, UiImage>,
         WriteStorage<'s, UiText>,
         ReadExpect<'s, ParentHierarchy>,
         Write<'s, EventChannel<UiButtonAction>>,
@@ -106,7 +105,7 @@ impl<'s> System<'s> for UiButtonSystem {
                             // it's not there yet
                             self.set_text_colors
                                 .entry(event.target)
-                                .or_insert(ActionChangeStack::new(text.color))
+                                .or_insert_with(|| ActionChangeStack::new(text.color))
                                 .add(*color);
 
                             text.color = *color;
@@ -134,30 +133,30 @@ impl<'s> System<'s> for UiButtonSystem {
                         }
                     }
                 }
-                SetTexture(ref texture_handle) => {
+                SetImage(ref set_image) => {
                     if let Some(image) = image_storage.get_mut(event.target) {
-                        self.set_textures
+                        self.set_images
                             .entry(event.target)
-                            .or_insert(ActionChangeStack::new(image.clone()))
-                            .add(texture_handle.clone());
+                            .or_insert_with(|| ActionChangeStack::new(image.clone()))
+                            .add(set_image.clone());
 
-                        *image = texture_handle.clone();
+                        *image = set_image.clone();
                     }
                 }
-                UnsetTexture(ref texture_handle) => {
+                UnsetTexture(ref unset_image) => {
                     if let Some(image) = image_storage.get_mut(event.target) {
-                        if !self.set_textures.contains_key(&event.target) {
+                        if !self.set_images.contains_key(&event.target) {
                             continue;
                         }
 
-                        self.set_textures
+                        self.set_images
                             .get_mut(&event.target)
-                            .and_then(|it| it.remove(texture_handle));
+                            .and_then(|it| it.remove(unset_image));
 
-                        *image = self.set_textures[&event.target].current();
+                        *image = self.set_images[&event.target].current();
 
-                        if self.set_textures[&event.target].is_empty() {
-                            self.set_textures.remove(&event.target);
+                        if self.set_images[&event.target].is_empty() {
+                            self.set_images.remove(&event.target);
                         }
                     }
                 }

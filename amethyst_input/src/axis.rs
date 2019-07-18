@@ -16,7 +16,7 @@ pub enum Axis {
     },
     /// Represents an analogue axis of a controller.
     Controller {
-        /// A number representing specific controller, assigned and reused in order of connection.
+        /// A number representing a specific controller, assigned and reused in order of connection.
         controller_id: u32,
         /// The axis being bound
         axis: ControllerAxis,
@@ -25,5 +25,12 @@ pub enum Axis {
         /// Treat input values from -dead_zone to dead_zone as 0,
         /// linearly interpolate remaining ranges.
         dead_zone: f64,
+    },
+    /// Represents the wheel on a PC mouse.
+    MouseWheel {
+        /// If this value is true then this axis is for the horizontal mouse wheel rather than the vertical mouse wheel.
+        ///
+        /// You almost always want this false.
+        horizontal: bool,
     },
 }

@@ -4,21 +4,35 @@
 
 use amethyst::{
     animation::{
-        get_animation_set, AnimationBundle, AnimationCommand, AnimationSet, AnimationSetPrefab,
-        EndControl,
+        get_animation_set, AnimationBundle, AnimationCommand, AnimationControlSet, AnimationSet,
+        AnimationSetPrefab, EndControl,
     },
-    assets::{JsonFormat, PrefabData, PrefabLoader, PrefabLoaderSystem, ProgressCounter},
-    config::Config,
+    assets::{PrefabData, PrefabLoader, PrefabLoaderSystem, Processor, ProgressCounter, RonFormat},
     core::transform::{Transform, TransformBundle},
     derive::PrefabData,
-    ecs::prelude::Entity,
+    ecs::{
+        prelude::Entity, Entities, Join, ReadExpect, ReadStorage, Resources, SystemData,
+        WriteStorage,
+    },
     error::Error,
     prelude::{Builder, World},
     renderer::{
-        Camera, DisplayConfig, DrawFlat2D, Pipeline, Projection, RenderBundle, ScreenDimensions,
-        SpriteRender, SpriteRenderPrefab, Stage,
+        camera::Camera,
+        pass::DrawFlat2DDesc,
+        rendy::{
+            factory::Factory,
+            graph::{
+                render::{RenderGroupDesc, SubpassBuilder},
+                GraphBuilder,
+            },
+            hal::{format::Format, image},
+        },
+        sprite::{prefab::SpriteScenePrefab, SpriteRender, SpriteSheet},
+        types::DefaultBackend,
+        GraphCreator, RenderingSystem,
     },
     utils::application_root_dir,
+    window::{ScreenDimensions, Window, WindowBundle},
     Application, GameData, GameDataBuilder, SimpleState, SimpleTrans, StateData, Trans,
 };
 use serde::{Deserialize, Serialize};
@@ -30,12 +44,10 @@ enum AnimationId {
 }
 
 /// Loading data for one entity
-#[derive(Debug, Clone, Serialize, Deserialize, PrefabData)]
+#[derive(Debug, Clone, Deserialize, PrefabData)]
 struct MyPrefabData {
-    /// Rendering position and orientation
-    transform: Transform,
-    /// Information for rendering a sprite
-    sprite_render: SpriteRenderPrefab,
+    /// Information for rendering a scene with sprites
+    sprite_scene: SpriteScenePrefab,
     /// Аll animations that can be run on the entity
     animation_set: AnimationSetPrefab<AnimationId, SpriteRender>,
 }
@@ -45,8 +57,6 @@ struct MyPrefabData {
 struct Example {
     /// A progress tracker to check that assets are loaded
     pub progress_counter: Option<ProgressCounter>,
-    /// Bat entity to start animation after loading
-    pub bat: Option<Entity>,
 }
 
 impl SimpleState for Example {
@@ -55,46 +65,55 @@ impl SimpleState for Example {
         // Crates new progress counter
         self.progress_counter = Some(Default::default());
         // Starts asset loading
-        let prefab_handle = world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
+        let bat_prefab = world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
             loader.load(
-                // FIXME: deserialization of untagged enum in `ron` is buggy
-                // change this to "prefab/sprite_animation.ron" after fix
-                "prefab/sprite_animation.json",
-                JsonFormat,
-                (),
+                "prefab/sprite_animation.ron",
+                RonFormat,
                 self.progress_counter.as_mut().unwrap(),
             )
         });
-        // Creates a new entity with components from MyPrefabData
-        self.bat = Some(world.create_entity().with(prefab_handle).build());
+        let arrow_test_prefab = world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
+            loader.load(
+                "prefab/sprite_animation_test.ron",
+                RonFormat,
+                self.progress_counter.as_mut().unwrap(),
+            )
+        });
+        // Creates new entities with components from MyPrefabData
+        world.create_entity().with(bat_prefab).build();
+        world.create_entity().with(arrow_test_prefab).build();
         // Creates a new camera
         initialise_camera(world);
     }
 
     fn update(&mut self, data: &mut StateData<'_, GameData<'_, '_>>) -> SimpleTrans {
         // Checks if we are still loading data
+
         if let Some(ref progress_counter) = self.progress_counter {
             // Checks progress
             if progress_counter.is_complete() {
                 let StateData { world, .. } = data;
-                // Gets the Fly animation from AnimationSet
-                let animation = world
-                    .read_storage::<AnimationSet<AnimationId, SpriteRender>>()
-                    .get(self.bat.unwrap())
-                    .and_then(|s| s.get(&AnimationId::Fly).cloned())
-                    .unwrap();
-                // Creates a new AnimationControlSet for bat entity
-                let mut sets = world.write_storage();
-                let control_set =
-                    get_animation_set::<AnimationId, SpriteRender>(&mut sets, self.bat.unwrap())
-                        .unwrap();
-                // Adds the animation to AnimationControlSet and loops infinitely
-                control_set.add_animation(
-                    AnimationId::Fly,
-                    &animation,
-                    EndControl::Loop(None),
-                    1.0,
-                    AnimationCommand::Start,
+                // Execute a pass similar to a system
+                world.exec(
+                    |(entities, animation_sets, mut control_sets): (
+                        Entities,
+                        ReadStorage<AnimationSet<AnimationId, SpriteRender>>,
+                        WriteStorage<AnimationControlSet<AnimationId, SpriteRender>>,
+                    )| {
+                        // For each entity that has AnimationSet
+                        for (entity, animation_set) in (&entities, &animation_sets).join() {
+                            // Creates a new AnimationControlSet for the entity
+                            let control_set = get_animation_set(&mut control_sets, entity).unwrap();
+                            // Adds the `Fly` animation to AnimationControlSet and loops infinitely
+                            control_set.add_animation(
+                                AnimationId::Fly,
+                                &animation_set.get(&AnimationId::Fly).unwrap(),
+                                EndControl::Loop(None),
+                                1.0,
+                                AnimationCommand::Start,
+                            );
+                        }
+                    },
                 );
                 // All data loaded
                 self.progress_counter = None;
@@ -109,16 +128,15 @@ fn initialise_camera(world: &mut World) {
         let dim = world.read_resource::<ScreenDimensions>();
         (dim.width(), dim.height())
     };
+    //println!("Init camera with dimensions: {}x{}", width, height);
 
     let mut camera_transform = Transform::default();
-    camera_transform.set_z(1.0);
+    camera_transform.set_translation_z(1.0);
 
     world
         .create_entity()
         .with(camera_transform)
-        .with(Camera::from(Projection::orthographic(
-            0.0, width, 0.0, height,
-        )))
+        .with(Camera::standard_2d(width, height))
         .build();
 }
 
@@ -127,26 +145,108 @@ fn main() -> amethyst::Result<()> {
 
     let app_root = application_root_dir()?;
     let assets_directory = app_root.join("examples/assets/");
-    let display_conf_path = app_root.join("examples/sprite_animation/resources/display_config.ron");
-    let display_config = DisplayConfig::load(display_conf_path);
-
-    let pipe = Pipeline::build().with_stage(
-        Stage::with_backbuffer()
-            .clear_target([0.0, 0.0, 0.0, 1.0], 1.0)
-            .with_pass(DrawFlat2D::new()),
-    );
+    let display_config_path =
+        app_root.join("examples/sprite_animation/resources/display_config.ron");
 
     let game_data = GameDataBuilder::default()
-        .with(PrefabLoaderSystem::<MyPrefabData>::default(), "", &[])
-        .with_bundle(TransformBundle::new())?
+        .with_bundle(WindowBundle::from_config_path(display_config_path))?
+        .with(
+            PrefabLoaderSystem::<MyPrefabData>::default(),
+            "scene_loader",
+            &[],
+        )
         .with_bundle(AnimationBundle::<AnimationId, SpriteRender>::new(
-            "animation_control_system",
-            "sampler_interpolation_system",
+            "sprite_animation_control",
+            "sprite_sampler_interpolation",
         ))?
-        .with_bundle(RenderBundle::new(pipe, Some(display_config)).with_sprite_sheet_processor())?;
+        .with_bundle(
+            TransformBundle::new()
+                .with_dep(&["sprite_animation_control", "sprite_sampler_interpolation"]),
+        )?
+        .with(
+            Processor::<SpriteSheet>::new(),
+            "sprite_sheet_processor",
+            &[],
+        )
+        .with_thread_local(RenderingSystem::<DefaultBackend, _>::new(
+            ExampleGraph::default(),
+        ));
 
     let mut game = Application::new(assets_directory, Example::default(), game_data)?;
     game.run();
 
     Ok(())
+}
+
+#[derive(Default)]
+struct ExampleGraph {
+    dimensions: Option<ScreenDimensions>,
+    surface_format: Option<Format>,
+    dirty: bool,
+}
+
+#[allow(clippy::map_clone)]
+impl GraphCreator<DefaultBackend> for ExampleGraph {
+    fn rebuild(&mut self, res: &Resources) -> bool {
+        // Rebuild when dimensions change, but wait until at least two frames have the same.
+        let new_dimensions = res.try_fetch::<ScreenDimensions>();
+        use std::ops::Deref;
+        if self.dimensions.as_ref() != new_dimensions.as_ref().map(|d| d.deref()) {
+            self.dirty = true;
+            self.dimensions = new_dimensions.map(|d| d.clone());
+            return false;
+        }
+        self.dirty
+    }
+
+    fn builder(
+        &mut self,
+        factory: &mut Factory<DefaultBackend>,
+        res: &Resources,
+    ) -> GraphBuilder<DefaultBackend, Resources> {
+        use amethyst::renderer::rendy::{
+            graph::present::PresentNode,
+            hal::command::{ClearDepthStencil, ClearValue},
+        };
+
+        self.dirty = false;
+
+        let window = <ReadExpect<'_, Window>>::fetch(res);
+        let surface = factory.create_surface(&window);
+        // cache surface format to speed things up
+        let surface_format = *self
+            .surface_format
+            .get_or_insert_with(|| factory.get_surface_format(&surface));
+        let dimensions = self.dimensions.as_ref().unwrap();
+        let window_kind =
+            image::Kind::D2(dimensions.width() as u32, dimensions.height() as u32, 1, 1);
+
+        let mut graph_builder = GraphBuilder::new();
+        let color = graph_builder.create_image(
+            window_kind,
+            1,
+            surface_format,
+            Some(ClearValue::Color([0.34, 0.36, 0.52, 1.0].into())),
+        );
+
+        let depth = graph_builder.create_image(
+            window_kind,
+            1,
+            Format::D32Sfloat,
+            Some(ClearValue::DepthStencil(ClearDepthStencil(1.0, 0))),
+        );
+
+        let sprite = graph_builder.add_node(
+            SubpassBuilder::new()
+                .with_group(DrawFlat2DDesc::new().builder())
+                .with_color(color)
+                .with_depth_stencil(depth)
+                .into_pass(),
+        );
+
+        let _present = graph_builder
+            .add_node(PresentNode::builder(factory, surface, color).with_dependency(sprite));
+
+        graph_builder
+    }
 }

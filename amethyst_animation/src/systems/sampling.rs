@@ -5,15 +5,18 @@ use minterpolate::InterpolationPrimitive;
 
 use amethyst_assets::AssetStorage;
 use amethyst_core::{
-    duration_to_nanos, duration_to_secs, nanos_to_duration, secs_to_duration,
-    specs::prelude::{Component, Join, Read, System, WriteStorage},
-    Time,
+    duration_to_nanos, duration_to_secs,
+    ecs::prelude::{Component, Join, Read, System, WriteStorage},
+    nanos_to_duration, secs_to_duration, Time,
 };
 
 use crate::resources::{
     AnimationSampling, ApplyData, BlendMethod, ControlState, EndControl, Sampler, SamplerControl,
     SamplerControlSet,
 };
+
+#[cfg(feature = "profiler")]
+use thread_profiler::profile_scope;
 
 /// System for interpolating active samplers.
 ///
@@ -26,7 +29,7 @@ use crate::resources::{
 /// ### Type parameters:
 ///
 /// - `T`: the component type that the animation should be applied to
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SamplerInterpolationSystem<T>
 where
     T: AnimationSampling,
@@ -63,6 +66,9 @@ where
     );
 
     fn run(&mut self, (time, samplers, mut control_sets, mut comps, apply_data): Self::SystemData) {
+        #[cfg(feature = "profiler")]
+        profile_scope!("sampler_interpolation_system");
+
         for (control_set, comp) in (&mut control_sets, &mut comps).join() {
             self.inner.clear();
             for control in control_set.samplers.iter_mut() {
@@ -257,7 +263,7 @@ fn next_duration(last_frame: Duration, duration: Duration) -> (Duration, u32) {
 
 fn linear_blend<T>(
     channel: &T::Channel,
-    output: &Vec<(f32, T::Channel, T::Primitive)>,
+    output: &[(f32, T::Channel, T::Primitive)],
 ) -> Option<T::Primitive>
 where
     T: AnimationSampling,

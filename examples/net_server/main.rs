@@ -1,6 +1,6 @@
 use amethyst::{
     core::frame_limiter::FrameRateLimitStrategy,
-    ecs::{Join, System, WriteStorage},
+    ecs::{Component, Entities, Join, System, VecStorage, WriteStorage},
     network::*,
     prelude::*,
     shrev::ReaderId,
@@ -15,10 +15,8 @@ fn main() -> Result<()> {
     amethyst::start_logger(Default::default());
 
     let game_data = GameDataBuilder::default()
-        .with_bundle(NetworkBundle::<()>::new(
+        .with_bundle(NetworkBundle::<String>::new(
             "127.0.0.1:3455".parse().unwrap(),
-            "127.0.0.1:3454".parse().unwrap(),
-            vec![Box::new(FilterConnected::<()>::new())],
         ))?
         .with(SpamReceiveSystem::new(), "rcv", &[]);
     let mut game = Application::build("./", State1)?
@@ -34,44 +32,67 @@ fn main() -> Result<()> {
 /// Default empty state
 pub struct State1;
 impl SimpleState for State1 {
-    fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-        data.world
-            .create_entity()
-            .with(NetConnection::<()>::new(
-                "127.0.0.1:3457".parse().unwrap(),
-                "127.0.0.1:3456".parse().unwrap(),
-            ))
-            .build();
-    }
+    fn on_start(&mut self, _data: StateData<'_, GameData<'_, '_>>) {}
+}
+
+/// Component to store client's event subscription
+struct SpamReader(ReaderId<NetEvent<String>>);
+
+impl Component for SpamReader {
+    type Storage = VecStorage<Self>;
 }
 
 /// A simple system that receives a ton of network events.
-struct SpamReceiveSystem {
-    pub reader: Option<ReaderId<NetEvent<()>>>,
-}
+struct SpamReceiveSystem {}
 
 impl SpamReceiveSystem {
     pub fn new() -> Self {
-        SpamReceiveSystem { reader: None }
+        SpamReceiveSystem {}
     }
 }
 
 impl<'a> System<'a> for SpamReceiveSystem {
-    type SystemData = (WriteStorage<'a, NetConnection<()>>,);
-    fn run(&mut self, (mut connections,): Self::SystemData) {
+    type SystemData = (
+        WriteStorage<'a, NetConnection<String>>,
+        WriteStorage<'a, SpamReader>,
+        Entities<'a>,
+    );
+    fn run(&mut self, (mut connections, mut readers, entities): Self::SystemData) {
         let mut count = 0;
-        for (conn,) in (&mut connections,).join() {
-            if self.reader.is_none() {
-                self.reader = Some(conn.receive_buffer.register_reader());
-            }
-            for ev in conn.receive_buffer.read(self.reader.as_mut().unwrap()) {
+        let mut connection_count = 0;
+
+        for (e, connection) in (&entities, &mut connections).join() {
+            let reader = readers
+                .entry(e)
+                .expect("Cannot get reader")
+                .or_insert_with(|| SpamReader(connection.register_reader()));
+
+            let mut client_disconnected = false;
+
+            for ev in connection.received_events(&mut reader.0) {
                 count += 1;
                 match ev {
-                    &NetEvent::TextMessage { ref msg } => info!("{}", msg),
+                    NetEvent::Packet(packet) => info!("{}", packet.content()),
+                    NetEvent::Connected(addr) => info!("New Client Connection: {}", addr),
+                    NetEvent::Disconnected(_addr) => {
+                        client_disconnected = true;
+                    }
                     _ => {}
                 }
             }
+
+            if client_disconnected {
+                println!("Client Disconnects");
+                entities
+                    .delete(e)
+                    .expect("Cannot delete connection from world!");
+            }
+
+            connection_count += 1;
         }
-        info!("Received {} messages this frame", count);
+        println!(
+            "Received {} messages this frame connections: {}",
+            count, connection_count
+        );
     }
 }

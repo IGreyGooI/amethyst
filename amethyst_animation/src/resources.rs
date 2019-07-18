@@ -6,10 +6,10 @@ use log::error;
 use minterpolate::{get_input_index, InterpolationFunction, InterpolationPrimitive};
 use serde::{Deserialize, Serialize};
 
-use amethyst_assets::{Asset, AssetStorage, Handle, PrefabData, ProcessingState};
+use amethyst_assets::{Asset, AssetStorage, Handle, PrefabData};
 use amethyst_core::{
+    ecs::prelude::{Component, DenseVecStorage, Entity, VecStorage, WriteStorage},
     shred::SystemData,
-    specs::prelude::{Component, DenseVecStorage, Entity, VecStorage, WriteStorage},
     timing::{duration_to_secs, secs_to_duration},
 };
 use amethyst_derive::PrefabData;
@@ -31,7 +31,7 @@ pub trait ApplyData<'a> {
 /// Master trait used to define animation sampling on a component
 pub trait AnimationSampling: Send + Sync + 'static + for<'b> ApplyData<'b> {
     /// The interpolation primitive
-    type Primitive: InterpolationPrimitive + Clone + Send + Sync + 'static;
+    type Primitive: InterpolationPrimitive + Debug + Clone + Send + Sync + 'static;
     /// An independent grouping or type of functions that operate on attributes of a component
     ///
     /// For example, `translation`, `scaling` and `rotation` are transformation channels independent
@@ -100,15 +100,6 @@ where
     const NAME: &'static str = "animation::Sampler";
     type Data = Self;
     type HandleStorage = VecStorage<Handle<Self>>;
-}
-
-impl<T> Into<Result<ProcessingState<Sampler<T>>, Error>> for Sampler<T>
-where
-    T: InterpolationPrimitive + Send + Sync + 'static,
-{
-    fn into(self) -> Result<ProcessingState<Sampler<T>>, Error> {
-        Ok(ProcessingState::Loaded(self))
-    }
 }
 
 /// Define the rest state for a component on an entity
@@ -228,7 +219,7 @@ where
 /// - `T`: the component type that the animation should be applied to
 ///
 /// [sampler]: struct.Sampler.html
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Animation<T>
 where
     T: AnimationSampling,
@@ -288,15 +279,6 @@ where
     type HandleStorage = VecStorage<Handle<Self>>;
 }
 
-impl<T> Into<Result<ProcessingState<Animation<T>>, Error>> for Animation<T>
-where
-    T: AnimationSampling,
-{
-    fn into(self) -> Result<ProcessingState<Animation<T>>, Error> {
-        Ok(ProcessingState::Loaded(self))
-    }
-}
-
 /// State of animation
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlState {
@@ -348,7 +330,7 @@ pub enum EndControl {
 /// ### Type parameters:
 ///
 /// - `T`: the component type that the sampling should be applied to
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SamplerControl<T>
 where
     T: AnimationSampling,
@@ -380,7 +362,7 @@ where
 /// ### Type parameters:
 ///
 /// - `T`: the component type that the sampling should be applied to
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SamplerControlSet<T>
 where
     T: AnimationSampling,
@@ -737,13 +719,14 @@ where
     ///
     /// This should be used with care, as this will leave all linked samplers in place. If in
     /// doubt, use `abort()` instead.
-    pub fn remove(&mut self, id: I) {
+    pub fn remove(&mut self, id: I) -> &mut Self {
         if let Some(index) = self.animations.iter().position(|a| a.0 == id) {
             self.animations.remove(index);
         }
+        self
     }
 
-    fn set_command(&mut self, id: I, command: AnimationCommand<T>) {
+    fn set_command(&mut self, id: I, command: AnimationCommand<T>) -> &mut Self {
         if let Some(&mut (_, ref mut control)) = self.animations.iter_mut().find(|a| a.0 == id) {
             control.command = command;
         } else if let Some(ref mut control) = self
@@ -753,20 +736,22 @@ where
         {
             control.control.command = command;
         }
+
+        self
     }
 
     /// Start animation if it exists
-    pub fn start(&mut self, id: I) {
-        self.set_command(id, AnimationCommand::Start);
+    pub fn start(&mut self, id: I) -> &mut Self {
+        self.set_command(id, AnimationCommand::Start)
     }
 
     /// Pause animation if it exists
-    pub fn pause(&mut self, id: I) {
-        self.set_command(id, AnimationCommand::Pause);
+    pub fn pause(&mut self, id: I) -> &mut Self {
+        self.set_command(id, AnimationCommand::Pause)
     }
 
     /// Toggle animation if it exists
-    pub fn toggle(&mut self, id: I) {
+    pub fn toggle(&mut self, id: I) -> &mut Self {
         if let Some(&mut (_, ref mut control)) = self.animations.iter_mut().find(|a| a.0 == id) {
             if control.state.is_running() {
                 control.command = AnimationCommand::Pause;
@@ -774,10 +759,12 @@ where
                 control.command = AnimationCommand::Start;
             }
         }
+
+        self
     }
 
     /// Set animation rate
-    pub fn set_rate(&mut self, id: I, rate_multiplier: f32) {
+    pub fn set_rate(&mut self, id: I, rate_multiplier: f32) -> &mut Self {
         if let Some(&mut (_, ref mut control)) = self.animations.iter_mut().find(|a| a.0 == id) {
             control.rate_multiplier = rate_multiplier;
         }
@@ -788,26 +775,28 @@ where
         {
             control.control.rate_multiplier = rate_multiplier;
         }
+
+        self
     }
 
     /// Step animation
-    pub fn step(&mut self, id: I, direction: StepDirection) {
-        self.set_command(id, AnimationCommand::Step(direction));
+    pub fn step(&mut self, id: I, direction: StepDirection) -> &mut Self {
+        self.set_command(id, AnimationCommand::Step(direction))
     }
 
     /// Set animation input value (point of interpolation)
-    pub fn set_input(&mut self, id: I, input: f32) {
-        self.set_command(id, AnimationCommand::SetInputValue(input));
+    pub fn set_input(&mut self, id: I, input: f32) -> &mut Self {
+        self.set_command(id, AnimationCommand::SetInputValue(input))
     }
 
     /// Set blend weights
-    pub fn set_blend_weight(&mut self, id: I, weights: Vec<(usize, T::Channel, f32)>) {
-        self.set_command(id, AnimationCommand::SetBlendWeights(weights));
+    pub fn set_blend_weight(&mut self, id: I, weights: Vec<(usize, T::Channel, f32)>) -> &mut Self {
+        self.set_command(id, AnimationCommand::SetBlendWeights(weights))
     }
 
     /// Abort animation
-    pub fn abort(&mut self, id: I) {
-        self.set_command(id, AnimationCommand::Abort);
+    pub fn abort(&mut self, id: I) -> &mut Self {
+        self.set_command(id, AnimationCommand::Abort)
     }
 
     /// Add animation with the given id, unless it already exists
@@ -818,20 +807,20 @@ where
         end: EndControl,
         rate_multiplier: f32,
         command: AnimationCommand<T>,
-    ) {
-        if self.animations.iter().any(|a| a.0 == id) {
-            return;
+    ) -> &mut Self {
+        if !self.animations.iter().any(|a| a.0 == id) {
+            self.animations.push((
+                id,
+                AnimationControl::new(
+                    animation.clone(),
+                    end,
+                    ControlState::Requested,
+                    command,
+                    rate_multiplier,
+                ),
+            ));
         }
-        self.animations.push((
-            id,
-            AnimationControl::new(
-                animation.clone(),
-                end,
-                ControlState::Requested,
-                command,
-                rate_multiplier,
-            ),
-        ));
+        self
     }
 
     /// Add deferred animation with the given id, unless it already exists
@@ -844,29 +833,29 @@ where
         command: AnimationCommand<T>,
         wait_for: I,
         wait_deferred_for: DeferStartRelation,
-    ) {
-        if self.animations.iter().any(|a| a.0 == id) {
-            return;
+    ) -> &mut Self {
+        if !self.animations.iter().any(|a| a.0 == id) {
+            self.deferred_animations.push(DeferredStart {
+                animation_id: id,
+                relation: (wait_for, wait_deferred_for),
+                control: AnimationControl::new(
+                    animation.clone(),
+                    end,
+                    ControlState::Requested,
+                    command,
+                    rate_multiplier,
+                ),
+            });
         }
-        self.deferred_animations.push(DeferredStart {
-            animation_id: id,
-            relation: (wait_for, wait_deferred_for),
-            control: AnimationControl::new(
-                animation.clone(),
-                end,
-                ControlState::Requested,
-                command,
-                rate_multiplier,
-            ),
-        });
+        self
     }
 
     /// Insert an animation directly
-    pub fn insert(&mut self, id: I, control: AnimationControl<T>) {
-        if self.animations.iter().any(|a| a.0 == id) {
-            return;
+    pub fn insert(&mut self, id: I, control: AnimationControl<T>) -> &mut Self {
+        if !self.animations.iter().any(|a| a.0 == id) {
+            self.animations.push((id, control));
         }
-        self.animations.push((id, control));
+        self
     }
 
     /// Check if there is an animation with the given id in the set
@@ -889,6 +878,7 @@ where
 /// ### Type parameters:
 ///
 /// - `T`: the component type that the animation should be applied to
+#[derive(Debug, Clone)]
 pub struct AnimationSet<I, T>
 where
     I: Eq + Hash,
@@ -923,8 +913,9 @@ where
     }
 
     /// Insert an animation in the set
-    pub fn insert(&mut self, id: I, handle: Handle<Animation<T>>) {
+    pub fn insert(&mut self, id: I, handle: Handle<Animation<T>>) -> &mut Self {
         self.animations.insert(id, handle);
+        self
     }
 
     /// Retrieve an animation handle from the set

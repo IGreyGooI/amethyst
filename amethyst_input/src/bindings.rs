@@ -14,6 +14,73 @@ use smallvec::SmallVec;
 
 use super::{Axis, Button};
 
+/// Define a set of types used for bindings configuration.
+/// Usually defaulted to `StringBindings`, which uses `String`s.
+///
+/// By defining your own set of types (usually enums),
+/// you will be able to have compile-time guarantees while handling events,
+/// and you can also add additional context, for example player index
+/// in local multiplayer game.
+///
+/// Example configuration for local multiplayer driving game might look like this:
+/// ```rust,edition2018,no_run,noplaypen
+/// # use serde::{Serialize, Deserialize};
+/// # use amethyst_input::{BindingTypes, Bindings};
+/// type PlayerId = u8;
+///
+/// #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+/// enum AxisBinding {
+///     Throttle(PlayerId),
+///     Steering(PlayerId),
+/// }
+///
+/// #[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+/// enum ActionBinding {
+///     UsePowerup(PlayerId),
+/// }
+///
+/// #[derive(Debug)]
+/// struct DriverBindingTypes;
+/// impl BindingTypes for DriverBindingTypes {
+///     type Axis = AxisBinding;
+///     type Action = ActionBinding;
+/// }
+///
+/// type GameBindings = Bindings<DriverBindingTypes>;
+/// ```
+/// And the `bindings_config.ron`:
+/// ```ron
+/// (
+///   axes: {
+///     Throttle(0): Emulated(pos: Key(W), neg: Key(S)),
+///     Steering(0): Emulated(pos: Key(D), neg: Key(A)),
+///     Throttle(1): Emulated(pos: Key(Up), neg: Key(Down)),
+///     Steering(1): Emulated(pos: Key(Right), neg: Key(Left)),
+///   },
+///   actions: {
+///     UsePowerup(0): [[Key(E)]],
+///     UsePowerup(1): [[Key(P)]],
+///   },
+/// )
+/// ```
+pub trait BindingTypes: Debug + Send + Sync + 'static {
+    /// Type used for defining axis keys. Usually an enum or string.
+    type Axis: Clone + Debug + Hash + Eq + Send + Sync + 'static;
+    /// Type used for defining action keys. Usually an enum or string.
+    type Action: Clone + Debug + Hash + Eq + Send + Sync + 'static;
+}
+
+/// The builtin `BindingTypes` implementation, set of types for binding configuration keys.
+/// Uses `String` for both axes and actions. Usage of this type is discouraged
+/// and it's meant mainly for prototypes. Check `BindingTypes` for examples.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+pub struct StringBindings;
+
+impl BindingTypes for StringBindings {
+    type Axis = String;
+    type Action = String;
+}
+
 /// Used for saving and loading input settings.
 ///
 /// An action can either be a single button or a combination of them.
@@ -39,43 +106,78 @@ use super::{Axis, Button};
 ///     }
 /// )
 /// ```
-#[derive(Derivative, Serialize, Deserialize, Clone)]
-#[derivative(Default(bound = ""))]
-pub struct Bindings<AX = String, AC = String>
-where
-    AX: Clone + Hash + Eq,
-    AC: Clone + Hash + Eq,
-{
-    pub(super) axes: HashMap<AX, Axis>,
+#[derive(Derivative, Serialize, Deserialize)]
+#[derivative(Debug(bound = ""), Default(bound = ""), Clone(bound = ""))]
+#[serde(bound(
+    serialize = "T::Axis: Serialize, T::Action: Serialize",
+    deserialize = "T::Axis: Deserialize<'de>, T::Action: Deserialize<'de>",
+))]
+pub struct Bindings<T: BindingTypes> {
+    pub(super) axes: HashMap<T::Axis, Axis>,
     /// The inner array here is for button combinations, the other is for different possibilities.
     ///
     /// So for example if you want to quit by either "Esc" or "Ctrl+q" you would have
     /// `[[Esc], [Ctrl, Q]]`.
-    pub(super) actions: HashMap<AC, SmallVec<[SmallVec<[Button; 2]>; 4]>>,
+    pub(super) actions: HashMap<T::Action, SmallVec<[SmallVec<[Button; 2]>; 4]>>,
 }
 
 /// An enum of possible errors that can occur when binding an action or axis.
-#[derive(Debug, Clone, PartialEq)]
-pub enum BindingError<AX: 'static, AC: 'static> {
+#[derive(Clone, Derivative)]
+#[derivative(Debug(bound = ""))]
+pub enum BindingError<T: BindingTypes> {
+    /// You attempted to bind a mousewheel axis twice.
+    MouseWheelAxisAlreadyBound(T::Axis),
     /// Combo provided for action binding has two (or more) of the same button.
-    ComboContainsDuplicates(AC),
-    /// Combo provided was already bound to contained action.
-    ComboAlreadyBound(AC),
-    /// A combo of length 1 was provided, and it overlaps with an axis binding.
-    ButtonBoundToAxis(AX, Axis),
-    /// Axis buttons provided have overlap with an existing axis
-    AxisButtonAlreadyBoundToAxis(AX, Axis),
-    /// Axis buttons have overlap with an action combo of length 1.
-    AxisButtonAlreadyBoundToAction(AC, Button),
+    ComboContainsDuplicates(T::Action),
+    /// Combo provided was already bound to the contained action.
+    ComboAlreadyBound(T::Action),
+    /// A combo of length one was provided, and it overlaps with an axis binding.
+    ButtonBoundToAxis(T::Axis, Axis),
+    /// Axis buttons provided have overlap with an existing axis.
+    AxisButtonAlreadyBoundToAxis(T::Axis, Axis),
+    /// Axis buttons have overlap with an action combo of length one.
+    AxisButtonAlreadyBoundToAction(T::Action, Button),
     /// That specific axis on that specific controller is already in use for an
     /// axis binding.
-    ControllerAxisAlreadyBound(AX),
+    ControllerAxisAlreadyBound(T::Axis),
 }
 
-impl<AX: 'static, AC: 'static> Display for BindingError<AX, AC>
+impl<T: BindingTypes> PartialEq for BindingError<T> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                BindingError::ComboContainsDuplicates(a),
+                BindingError::ComboContainsDuplicates(x),
+            ) => a == x,
+            (BindingError::ComboAlreadyBound(a), BindingError::ComboAlreadyBound(x)) => a == x,
+            (BindingError::ButtonBoundToAxis(a, b), BindingError::ButtonBoundToAxis(x, y)) => {
+                a == x && b == y
+            }
+            (
+                BindingError::AxisButtonAlreadyBoundToAxis(a, b),
+                BindingError::AxisButtonAlreadyBoundToAxis(x, y),
+            ) => a == x && b == y,
+            (
+                BindingError::AxisButtonAlreadyBoundToAction(a, b),
+                BindingError::AxisButtonAlreadyBoundToAction(x, y),
+            ) => a == x && b == y,
+            (
+                BindingError::ControllerAxisAlreadyBound(a),
+                BindingError::ControllerAxisAlreadyBound(x),
+            ) => a == x,
+            (
+                BindingError::MouseWheelAxisAlreadyBound(a),
+                BindingError::MouseWheelAxisAlreadyBound(x),
+            ) => a == x,
+            (_, _) => false,
+        }
+    }
+}
+
+impl<T: BindingTypes> Display for BindingError<T>
 where
-    AX: Display,
-    AC: Display,
+    T::Action: Display,
+    T::Axis: Display,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match *self {
@@ -103,14 +205,17 @@ where
             BindingError::ControllerAxisAlreadyBound(ref id) => {
                 write!(f, "Controller axis provided is already in use by {}", id)
             }
+            BindingError::MouseWheelAxisAlreadyBound(ref id) => {
+                write!(f, "Mouse wheel axis provided is already in use by {}", id)
+            }
         }
     }
 }
 
-impl<AX, AC> Error for BindingError<AX, AC>
+impl<T: BindingTypes> Error for BindingError<T>
 where
-    AX: Debug + Display,
-    AC: Debug + Display,
+    T::Action: Display,
+    T::Axis: Display,
 {
 }
 
@@ -141,54 +246,48 @@ impl Display for ActionRemovedError {
 
 impl Error for ActionRemovedError {}
 
-impl<AX, AC> Bindings<AX, AC>
-where
-    AX: Hash + Eq + Clone + Display,
-    AC: Hash + Eq + Clone + Display,
-{
+impl<T: BindingTypes> Bindings<T> {
     /// Creates a new empty Bindings structure
     pub fn new() -> Self {
         Default::default()
     }
 }
 
-impl<AX, AC> Bindings<AX, AC>
-where
-    AX: Hash + Eq + Clone + Display,
-    AC: Hash + Eq + Clone + Display,
-{
+impl<T: BindingTypes> Bindings<T> {
     /// Assign an axis to an ID value
     ///
     /// This will insert a new axis if no entry for this id exists.
     /// If one does exist this will replace the axis at that id and return it.
-    pub fn insert_axis<A: Into<AX>>(
+    pub fn insert_axis<A: Into<T::Axis>>(
         &mut self,
         id: A,
         axis: Axis,
-    ) -> Result<Option<Axis>, BindingError<AX, AC>> {
+    ) -> Result<Option<Axis>, BindingError<T>> {
         let id = id.into();
         self.check_axis_invariants(&id, &axis)?;
         Ok(self.axes.insert(id, axis))
     }
 
     /// Removes an axis, this will return the removed axis if successful.
-    pub fn remove_axis<A: Hash + Eq + ?Sized>(&mut self, id: &A) -> Option<Axis>
+    pub fn remove_axis<A>(&mut self, id: &A) -> Option<Axis>
     where
-        AX: Borrow<A>,
+        T::Axis: Borrow<A>,
+        A: Hash + Eq + ?Sized,
     {
         self.axes.remove(id)
     }
 
     /// Returns a reference to an axis.
-    pub fn axis<A: Hash + Eq + ?Sized>(&mut self, id: &A) -> Option<&Axis>
+    pub fn axis<A>(&self, id: &A) -> Option<&Axis>
     where
-        AX: Borrow<A>,
+        T::Axis: Borrow<A>,
+        A: Hash + Eq + ?Sized,
     {
         self.axes.get(id)
     }
 
     /// Gets a list of all axes
-    pub fn axes(&self) -> impl Iterator<Item = &AX> {
+    pub fn axes(&self) -> impl Iterator<Item = &T::Axis> {
         self.axes.keys()
     }
 
@@ -197,9 +296,9 @@ where
     /// This will attempt to insert a new binding between this action and the button(s).
     pub fn insert_action_binding<B: IntoIterator<Item = Button>>(
         &mut self,
-        id: AC,
+        id: T::Action,
         binding: B,
-    ) -> Result<(), BindingError<AX, AC>> {
+    ) -> Result<(), BindingError<T>> {
         let bind: SmallVec<[Button; 2]> = binding.into_iter().collect();
         self.check_action_invariants(&id, bind.as_slice())?;
         let mut make_new = false;
@@ -214,19 +313,20 @@ where
         if make_new {
             let mut bindings = SmallVec::new();
             bindings.push(bind.clone());
-            self.actions.insert(id.into(), bindings);
+            self.actions.insert(id, bindings);
         }
         Ok(())
     }
 
     /// Removes an action binding that was assigned previously.
-    pub fn remove_action_binding<T: Hash + Eq + ?Sized>(
+    pub fn remove_action_binding<A>(
         &mut self,
-        id: &T,
+        id: &A,
         binding: &[Button],
     ) -> Result<(), ActionRemovedError>
     where
-        AC: Borrow<T>,
+        T::Action: Borrow<A>,
+        A: Hash + Eq + ?Sized,
     {
         for i in 0..binding.len() {
             for j in (i + 1)..binding.len() {
@@ -259,25 +359,26 @@ where
     }
 
     /// Returns an action's bindings.
-    pub fn action_bindings<T: Hash + Eq + ?Sized>(&self, id: &T) -> impl Iterator<Item = &[Button]>
+    pub fn action_bindings<A>(&self, id: &A) -> impl Iterator<Item = &[Button]>
     where
-        AC: Borrow<T>,
+        T::Action: Borrow<A>,
+        A: Hash + Eq + ?Sized,
     {
         self.actions
             .get(id)
-            .map(|a| a.as_slice())
+            .map(SmallVec::as_slice)
             .unwrap_or(&[])
             .iter()
-            .map(|a| a.as_slice())
+            .map(SmallVec::as_slice)
     }
 
     /// Gets a list of all action bindings
-    pub fn actions(&self) -> impl Iterator<Item = &AC> {
+    pub fn actions(&self) -> impl Iterator<Item = &T::Action> {
         self.actions.keys()
     }
 
     /// Check that this structure upholds its guarantees. Should only be necessary when serializing or deserializing the bindings.
-    pub fn check_invariants(&mut self) -> Result<(), BindingError<AX, AC>> {
+    pub fn check_invariants(&mut self) -> Result<(), BindingError<T>> {
         // The easiest way to do this is to use the existing code that checks for invariants when adding bindings.
         // So we'll just remove and then re-add all of the bindings.
 
@@ -307,9 +408,9 @@ where
 
     fn check_action_invariants(
         &self,
-        id: &AC,
+        id: &T::Action,
         bind: &[Button],
-    ) -> Result<(), BindingError<AX, AC>> {
+    ) -> Result<(), BindingError<T>> {
         // Guarantee each button is unique.
         for i in 0..bind.len() {
             for j in (i + 1)..bind.len() {
@@ -320,13 +421,10 @@ where
         }
         if bind.len() == 1 {
             for (k, a) in self.axes.iter() {
-                match a {
-                    Axis::Emulated { pos, neg } => {
-                        if bind[0] == *pos || bind[0] == *neg {
-                            return Err(BindingError::ButtonBoundToAxis(k.clone(), a.clone()));
-                        }
+                if let Axis::Emulated { pos, neg } = a {
+                    if bind[0] == *pos || bind[0] == *neg {
+                        return Err(BindingError::ButtonBoundToAxis(k.clone(), a.clone()));
                     }
-                    _ => {}
                 }
             }
         }
@@ -340,39 +438,31 @@ where
         Ok(())
     }
 
-    fn check_axis_invariants(&self, id: &AX, axis: &Axis) -> Result<(), BindingError<AX, AC>> {
+    fn check_axis_invariants(&self, id: &T::Axis, axis: &Axis) -> Result<(), BindingError<T>> {
         match axis {
             Axis::Emulated {
                 pos: ref axis_pos,
                 neg: ref axis_neg,
             } => {
                 for (k, a) in self.axes.iter().filter(|(k, _a)| *k != id) {
-                    match a {
-                        Axis::Emulated { pos, neg } => {
-                            if axis_pos == pos
-                                || axis_pos == neg
-                                || axis_neg == pos
-                                || axis_neg == neg
-                            {
-                                return Err(BindingError::AxisButtonAlreadyBoundToAxis(
-                                    k.clone(),
-                                    a.clone(),
-                                ));
-                            }
+                    if let Axis::Emulated { pos, neg } = a {
+                        if axis_pos == pos || axis_pos == neg || axis_neg == pos || axis_neg == neg
+                        {
+                            return Err(BindingError::AxisButtonAlreadyBoundToAxis(
+                                k.clone(),
+                                a.clone(),
+                            ));
                         }
-                        _ => {}
                     }
                 }
                 for (k, a) in self.actions.iter() {
                     for c in a {
                         // Since you can't bind combos to an axis we only need to check combos with length 1.
-                        if c.len() == 1 {
-                            if c[0] == *axis_pos || c[0] == *axis_neg {
-                                return Err(BindingError::AxisButtonAlreadyBoundToAction(
-                                    k.clone(),
-                                    c[0].clone(),
-                                ));
-                            }
+                        if c.len() == 1 && (c[0] == *axis_pos || c[0] == *axis_neg) {
+                            return Err(BindingError::AxisButtonAlreadyBoundToAction(
+                                k.clone(),
+                                c[0],
+                            ));
                         }
                     }
                 }
@@ -383,17 +473,26 @@ where
                 ..
             } => {
                 for (k, a) in self.axes.iter().filter(|(k, _a)| *k != id) {
-                    match a {
-                        Axis::Controller {
-                            controller_id,
-                            axis,
-                            ..
-                        } => {
-                            if controller_id == input_controller_id && axis == input_axis {
-                                return Err(BindingError::ControllerAxisAlreadyBound(k.clone()));
-                            }
+                    if let Axis::Controller {
+                        controller_id,
+                        axis,
+                        ..
+                    } = a
+                    {
+                        if controller_id == input_controller_id && axis == input_axis {
+                            return Err(BindingError::ControllerAxisAlreadyBound(k.clone()));
                         }
-                        _ => {}
+                    }
+                }
+            }
+            Axis::MouseWheel {
+                horizontal: ref input_horizontal,
+            } => {
+                for (k, a) in self.axes.iter().filter(|(k, _a)| *k != id) {
+                    if let Axis::MouseWheel { horizontal } = a {
+                        if input_horizontal == horizontal {
+                            return Err(BindingError::MouseWheelAxisAlreadyBound(k.clone()));
+                        }
                     }
                 }
             }
@@ -410,7 +509,7 @@ mod tests {
 
     #[test]
     fn add_and_remove_actions() {
-        let mut bindings = Bindings::<String, String>::new();
+        let mut bindings = Bindings::<StringBindings>::new();
         assert_eq!(bindings.actions().next(), None);
         assert_eq!(bindings.action_bindings("test_action").next(), None);
 
@@ -526,7 +625,7 @@ mod tests {
     }
     #[test]
     fn insert_errors() {
-        let mut bindings = Bindings::<String, String>::new();
+        let mut bindings = Bindings::<StringBindings>::new();
         assert_eq!(
             bindings
                 .insert_action_binding(
@@ -688,11 +787,38 @@ mod tests {
                 .unwrap_err(),
             BindingError::ControllerAxisAlreadyBound(String::from("test_controller_axis"))
         );
+        assert_eq!(
+            bindings
+                .insert_axis(
+                    String::from("test_mouse_wheel_axis"),
+                    Axis::MouseWheel { horizontal: true },
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            bindings
+                .insert_axis(
+                    String::from("test_mouse_wheel_axis"),
+                    Axis::MouseWheel { horizontal: false },
+                )
+                .unwrap(),
+            Some(Axis::MouseWheel { horizontal: true })
+        );
+        assert_eq!(
+            bindings
+                .insert_axis(
+                    String::from("test_mouse_wheel_axis_2"),
+                    Axis::MouseWheel { horizontal: false },
+                )
+                .unwrap_err(),
+            BindingError::MouseWheelAxisAlreadyBound(String::from("test_mouse_wheel_axis"))
+        );
     }
 
     #[test]
     fn add_and_remove_axes() {
-        let mut bindings = Bindings::<String, String>::new();
+        let mut bindings = Bindings::<StringBindings>::new();
         assert_eq!(
             bindings
                 .insert_axis(
@@ -734,6 +860,19 @@ mod tests {
                 invert: false,
                 dead_zone: 0.25,
             })
+        );
+        assert_eq!(
+            bindings
+                .insert_axis(
+                    String::from("test_mouse_wheel_axis"),
+                    Axis::MouseWheel { horizontal: false },
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            bindings.remove_axis("test_mouse_wheel_axis"),
+            Some(Axis::MouseWheel { horizontal: false })
         );
     }
 }

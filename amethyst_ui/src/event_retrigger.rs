@@ -1,13 +1,16 @@
 use std::default::Default;
 
 use amethyst_core::{
+    ecs::prelude::{Component, Read, ReadStorage, Resources, System, SystemData, Write},
     shrev::{Event, EventChannel, ReaderId},
-    specs::prelude::{Component, Read, ReadStorage, Resources, System, SystemData, Write},
 };
 
 use derivative::Derivative;
 
 use crate::event::TargetedEvent;
+
+#[cfg(feature = "profiler")]
+use thread_profiler::profile_scope;
 
 /// Describes anything that can receive events one by one or in batches. This
 /// lets whoever wants to receive triggered events decide on how they
@@ -45,7 +48,7 @@ pub trait EventRetrigger: Component {
 /// Links up the given in- and output types' `EventChannel`s listening
 /// to incoming events and calling `apply` on the respective `Retrigger`
 /// components.
-#[derive(Derivative)]
+#[derive(Derivative, Debug)]
 #[derivative(Default(bound = ""))]
 pub struct EventRetriggerSystem<T: EventRetrigger> {
     event_reader: Option<ReaderId<T::In>>,
@@ -79,6 +82,9 @@ where
     }
 
     fn run(&mut self, (in_channel, mut out_channel, retrigger): Self::SystemData) {
+        #[cfg(feature = "profiler")]
+        profile_scope!("event_retrigger_system");
+
         let event_reader = self.event_reader.as_mut().expect(
             "`EventRetriggerSystem::setup` was not called before `EventRetriggerSystem::run`",
         );

@@ -1,18 +1,23 @@
 use amethyst_core::{
-    specs::prelude::{
+    ecs::prelude::{
         BitSet, ComponentEvent, Join, ReadStorage, ReaderId, Resources, System, WriteStorage,
     },
-    GlobalTransform,
+    math::{convert, Matrix4},
+    Transform,
 };
-use amethyst_renderer::JointTransforms;
+use amethyst_rendy::skinning::JointTransforms;
 
 use log::error;
+
+#[cfg(feature = "profiler")]
+use thread_profiler::profile_scope;
 
 use super::resources::*;
 
 /// System for performing vertex skinning.
 ///
 /// Needs to run after global transforms have been updated for the current frame.
+#[derive(Default, Debug)]
 pub struct VertexSkinningSystem {
     /// Also scratch space, used while determining which skins need to be updated.
     updated: BitSet,
@@ -24,23 +29,22 @@ pub struct VertexSkinningSystem {
 impl VertexSkinningSystem {
     /// Creates a new `VertexSkinningSystem`
     pub fn new() -> Self {
-        Self {
-            updated: BitSet::new(),
-            updated_skins: BitSet::new(),
-            updated_id: None,
-        }
+        Self::default()
     }
 }
 
 impl<'a> System<'a> for VertexSkinningSystem {
     type SystemData = (
         ReadStorage<'a, Joint>,
-        ReadStorage<'a, GlobalTransform>,
+        ReadStorage<'a, Transform>,
         WriteStorage<'a, Skin>,
         WriteStorage<'a, JointTransforms>,
     );
 
     fn run(&mut self, (joints, global_transforms, mut skins, mut matrices): Self::SystemData) {
+        #[cfg(feature = "profiler")]
+        profile_scope!("vertex_skinning_system");
+
         self.updated.clear();
 
         global_transforms
@@ -84,19 +88,19 @@ impl<'a> System<'a> for VertexSkinningSystem {
                     })
                     .flatten()
                     .map(|(global, inverse_bind_matrix)| {
-                        (global.0 * inverse_bind_matrix * bind_shape)
+                        (global.global_matrix() * inverse_bind_matrix * bind_shape)
                     }),
             );
 
             // update the joint matrices in all referenced mesh entities
             for (_, mesh_global, matrix) in (&skin.meshes, &global_transforms, &mut matrices).join()
             {
-                if let Some(global_inverse) = mesh_global.0.try_inverse() {
+                if let Some(global_inverse) = mesh_global.global_matrix().try_inverse() {
                     matrix.matrices.clear();
                     matrix
                         .matrices
                         .extend(skin.joint_matrices.iter().map(|joint_matrix| {
-                            Into::<[[f32; 4]; 4]>::into(global_inverse * joint_matrix)
+                            convert::<_, Matrix4<f32>>(global_inverse * joint_matrix)
                         }));
                 }
             }
@@ -105,13 +109,13 @@ impl<'a> System<'a> for VertexSkinningSystem {
         for (_, mesh_global, joint_transform) in
             (&self.updated, &global_transforms, &mut matrices).join()
         {
-            if let Some(global_inverse) = mesh_global.0.try_inverse() {
+            if let Some(global_inverse) = mesh_global.global_matrix().try_inverse() {
                 if let Some(skin) = skins.get(joint_transform.skin) {
                     joint_transform.matrices.clear();
                     joint_transform
                         .matrices
                         .extend(skin.joint_matrices.iter().map(|joint_matrix| {
-                            Into::<[[f32; 4]; 4]>::into(global_inverse * joint_matrix)
+                            convert::<_, Matrix4<f32>>(global_inverse * joint_matrix)
                         }));
                 } else {
                     error!(
@@ -124,9 +128,9 @@ impl<'a> System<'a> for VertexSkinningSystem {
     }
 
     fn setup(&mut self, res: &mut Resources) {
-        use amethyst_core::specs::prelude::SystemData;
+        use amethyst_core::ecs::prelude::SystemData;
         Self::SystemData::setup(res);
-        let mut transform = WriteStorage::<GlobalTransform>::fetch(res);
+        let mut transform = WriteStorage::<Transform>::fetch(res);
         self.updated_id = Some(transform.register_reader());
     }
 }

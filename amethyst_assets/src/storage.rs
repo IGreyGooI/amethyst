@@ -2,7 +2,7 @@ use std::{
     marker::PhantomData,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, Weak,
+        Arc, Weak,
     },
 };
 
@@ -13,7 +13,7 @@ use log::{debug, error, trace, warn};
 use rayon::ThreadPool;
 
 use amethyst_core::{
-    specs::{
+    ecs::{
         prelude::{Component, Read, ReadExpect, System, VecStorage, Write},
         storage::UnprotectedStorage,
     },
@@ -21,8 +21,11 @@ use amethyst_core::{
 };
 use amethyst_error::{Error, ResultExt};
 
+#[cfg(feature = "profiler")]
+use thread_profiler::profile_scope;
+
 use crate::{
-    asset::{Asset, FormatValue},
+    asset::{Asset, FormatValue, ProcessableAsset},
     error,
     progress::Tracker,
     reload::{HotReloadStrategy, Reload},
@@ -44,14 +47,13 @@ impl Allocator {
 /// An asset storage, storing the actual assets and allocating
 /// handles to them.
 pub struct AssetStorage<A: Asset> {
-    assets: VecStorage<A>,
+    assets: VecStorage<(A, u32)>,
     bitset: BitSet,
     handles: Vec<Handle<A>>,
     handle_alloc: Allocator,
     pub(crate) processed: Arc<MsQueue<Processed<A>>>,
-    reloads: Vec<(WeakHandle<A>, Box<dyn Reload<A>>)>,
+    reloads: Vec<(WeakHandle<A>, Box<dyn Reload<A::Data>>)>,
     unused_handles: MsQueue<Handle<A>>,
-    requeue: Mutex<Vec<Processed<A>>>,
 }
 
 /// Returned by processor systems, describes the loading state of the asset.
@@ -86,6 +88,13 @@ impl<A: Asset> AssetStorage<A> {
         }
     }
 
+    /// Remove all data from asset storages, invalidating all associated handles.
+    /// Trying to retreive any data using old handle will return `None`.
+    pub fn unload_all(&mut self) {
+        unsafe { self.assets.clean(&self.bitset) }
+        self.bitset.clear();
+    }
+
     /// When cloning an asset handle, you'll get another handle,
     /// but pointing to the same asset. If you instead want to
     /// indeed create a new asset, you can use this method.
@@ -103,7 +112,7 @@ impl<A: Asset> AssetStorage<A> {
             self.handles.push(h.clone());
 
             unsafe {
-                self.assets.insert(id, asset);
+                self.assets.insert(id, (asset, 0));
             }
 
             Some(h)
@@ -115,16 +124,93 @@ impl<A: Asset> AssetStorage<A> {
     /// Get an asset from a given asset handle.
     pub fn get(&self, handle: &Handle<A>) -> Option<&A> {
         if self.bitset.contains(handle.id()) {
+            Some(unsafe { &self.assets.get(handle.id()).0 })
+        } else {
+            None
+        }
+    }
+
+    /// Get an asset version from a given asset handle.
+    pub fn get_version(&self, handle: &Handle<A>) -> Option<u32> {
+        if self.bitset.contains(handle.id()) {
+            Some(unsafe { self.assets.get(handle.id()).1 })
+        } else {
+            None
+        }
+    }
+
+    /// Get an asset and it's version from a given asset handle.
+    pub fn get_with_version(&self, handle: &Handle<A>) -> Option<&(A, u32)> {
+        if self.bitset.contains(handle.id()) {
             Some(unsafe { self.assets.get(handle.id()) })
         } else {
             None
         }
     }
 
+    /// Get an asset by it's handle id.
+    pub fn get_by_id(&self, id: u32) -> Option<&A> {
+        if self.bitset.contains(id) {
+            Some(unsafe { &self.assets.get(id).0 })
+        } else {
+            None
+        }
+    }
+
+    /// Replace asset under given handle, incrementing the version id.
+    /// Returns old asset. Panics if asset handle is empty.
+    pub fn replace(&mut self, handle: &Handle<A>, asset: A) -> A {
+        if self.bitset.contains(handle.id()) {
+            let data = unsafe { self.assets.get_mut(handle.id()) };
+            data.1 += 1;
+            std::mem::replace(&mut data.0, asset)
+        } else {
+            panic!("Trying to replace not loaded asset");
+        }
+    }
+
+    /// Insert preloaded asset into storage synchronously
+    /// without going through usual loading step.
+    /// You probably want to use `Loader::load` instead.
+    ///
+    /// Use this method only when you need to insert procedurally generated
+    /// asset directly into storage, skipping intermediate Asset::Data form.
+    pub fn insert(&mut self, asset: A) -> Handle<A> {
+        let handle = self.allocate();
+        let id = handle.id();
+        self.bitset.add(id);
+        self.handles.push(handle.clone());
+        unsafe {
+            self.assets.insert(id, (asset, 0));
+        }
+        handle
+    }
+
+    /// Check if given handle points to a valid asset in the storage.
+    pub fn contains(&self, handle: &Handle<A>) -> bool {
+        self.bitset.contains(handle.id())
+    }
+
+    /// Check if given asset id points to a valid asset in the storage.
+    pub fn contains_id(&self, id: u32) -> bool {
+        self.bitset.contains(id)
+    }
+
+    /// Get an asset by it's handle id without checking the internal bitset.
+    /// Use `contains_id` to manually check it's status before access.
+    ///
+    /// # Safety
+    /// You must manually verify that given asset id is valid.
+    /// Failing to do so may result in dereferencing
+    /// uninitialized memory or out of bounds access.
+    pub unsafe fn get_by_id_unchecked(&self, id: u32) -> &A {
+        &self.assets.get(id).0
+    }
+
     /// Get an asset mutably from a given asset handle.
     pub fn get_mut(&mut self, handle: &Handle<A>) -> Option<&mut A> {
         if self.bitset.contains(handle.id()) {
-            Some(unsafe { self.assets.get_mut(handle.id()) })
+            Some(unsafe { &mut self.assets.get_mut(handle.id()).0 })
         } else {
             None
         }
@@ -157,10 +243,7 @@ impl<A: Asset> AssetStorage<A> {
         F: FnMut(A::Data) -> Result<ProcessingState<A>, Error>,
     {
         {
-            let requeue = self
-                .requeue
-                .get_mut()
-                .expect("The mutex of `requeue` in `AssetStorage` was poisoned");
+            let mut requeue = Vec::new();
             while let Some(processed) = self.processed.try_pop() {
                 let assets = &mut self.assets;
                 let bitset = &mut self.bitset;
@@ -243,7 +326,7 @@ impl<A: Asset> AssetStorage<A> {
                         // NOTE: the loader has to ensure that a handle will be used
                         // together with a `Data` only once.
                         unsafe {
-                            assets.insert(id, asset);
+                            assets.insert(id, (asset, 0));
                         }
 
                         (reload_obj, handle)
@@ -297,10 +380,9 @@ impl<A: Asset> AssetStorage<A> {
                             "Expected handle {:?} to be valid, but the asset storage says otherwise",
                             handle,
                         );
-                        unsafe {
-                            let old = assets.get_mut(id);
-                            *old = asset;
-                        }
+                        let data = unsafe { self.assets.get_mut(id) };
+                        data.1 += 1;
+                        drop_fn(std::mem::replace(&mut data.0, asset));
 
                         (reload_obj, handle)
                     }
@@ -327,7 +409,8 @@ impl<A: Asset> AssetStorage<A> {
             let handle = self.handles.swap_remove(i);
             let id = handle.id();
             unsafe {
-                drop_fn(self.assets.remove(id));
+                let (asset, _) = self.assets.remove(id);
+                drop_fn(asset);
             }
             self.bitset.remove(id);
 
@@ -401,7 +484,6 @@ impl<A: Asset> Default for AssetStorage<A> {
             processed: Arc::new(MsQueue::new()),
             reloads: Default::default(),
             unused_handles: MsQueue::new(),
-            requeue: Mutex::new(Vec::default()),
         }
     }
 }
@@ -419,6 +501,7 @@ impl<A: Asset> Drop for AssetStorage<A> {
 ///
 /// This system can only be used if the asset data implements
 /// `Into<Result<A, BoxedErr>>`.
+#[derive(Default)]
 pub struct Processor<A> {
     marker: PhantomData<A>,
 }
@@ -435,8 +518,7 @@ impl<A> Processor<A> {
 
 impl<'a, A> System<'a> for Processor<A>
 where
-    A: Asset,
-    A::Data: Into<Result<ProcessingState<A>, Error>>,
+    A: Asset + ProcessableAsset,
 {
     type SystemData = (
         Write<'a, AssetStorage<A>>,
@@ -446,10 +528,13 @@ where
     );
 
     fn run(&mut self, (mut storage, pool, time, strategy): Self::SystemData) {
+        #[cfg(feature = "profiler")]
+        profile_scope!("processor_system");
+
         use std::ops::Deref;
 
         storage.process(
-            Into::into,
+            ProcessableAsset::process,
             time.frame_number(),
             &**pool,
             strategy.as_ref().map(Deref::deref),
@@ -505,16 +590,16 @@ where
 
 pub(crate) enum Processed<A: Asset> {
     NewAsset {
-        data: Result<FormatValue<A>, Error>,
+        data: Result<FormatValue<A::Data>, Error>,
         handle: Handle<A>,
         name: String,
         tracker: Box<dyn Tracker>,
     },
     HotReload {
-        data: Result<FormatValue<A>, Error>,
+        data: Result<FormatValue<A::Data>, Error>,
         handle: Handle<A>,
         name: String,
-        old_reload: Box<dyn Reload<A>>,
+        old_reload: Box<dyn Reload<A::Data>>,
     },
 }
 

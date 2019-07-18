@@ -3,8 +3,11 @@
 //! This modules contains an extension trait for the System trait which adds useful transformation
 //! functions.
 
+use crate::ecs::prelude::{Read, System};
 use shred::{RunningTime, SystemData};
-use specs::prelude::{Read, System};
+
+#[cfg(feature = "profiler")]
+use thread_profiler::profile_scope;
 
 /// Extension functionality associated systems.
 pub trait SystemExt {
@@ -98,6 +101,7 @@ where
 /// This is created using the [`SystemExt::pausable`] method.
 ///
 /// [`SystemExt::pausable`]: trait.SystemExt.html#tymethod.pausable
+#[derive(Debug)]
 pub struct Pausable<S, V> {
     system: S,
     value: V,
@@ -112,6 +116,9 @@ where
     type SystemData = (Read<'s, V>, S::SystemData);
 
     fn run(&mut self, data: Self::SystemData) {
+        #[cfg(feature = "profiler")]
+        profile_scope!("pauseable_system");
+
         if self.value != *data.0 {
             return;
         }

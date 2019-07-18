@@ -1,6 +1,11 @@
+/*!
+    @import /amethyst_rendy/src/sprite/mod.rs#SpriteList
+    SpriteList
+*/
+
 (
-  spritesheet_width: 512,
-  spritesheet_height: 512,
+  texture_width: 512,
+  texture_height: 512,
   sprites: [
     (
       x: 0,

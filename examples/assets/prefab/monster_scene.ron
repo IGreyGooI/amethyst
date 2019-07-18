@@ -1,5 +1,12 @@
 #![enable(implicit_some)]
 
+/*!
+
+    @import /amethyst_assets/src/prefab/mod.rs#Prefab
+    @import ../../gltf/main.rs#ScenePrefabData
+    Prefab<ScenePrefabData>
+*/
+
 Prefab (
     entities: [
         (
@@ -17,7 +24,7 @@ Prefab (
         (
             parent: 1,
             data: (
-                gltf: File("mesh/Monster.gltf", GltfSceneFormat, (
+                gltf: File("mesh/Monster.gltf", (
                     generate_tex_coords: (0.1, 0.1),
                     load_animations: true,
                     flip_v_coord: true,
@@ -30,12 +37,12 @@ Prefab (
                 transform: Transform (
                      translation: (5.0, 2.0, 5.0),
                 ),
-                camera: Perspective((
+                camera: Perspective(
                     aspect: 1.33333333333333333333,
                     fovy: 1.0471975512,
                     znear: 0.1,
                     zfar: 2000.0,
-                )),
+                ),
             ),
         ),
         (

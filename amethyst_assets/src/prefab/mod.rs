@@ -3,12 +3,14 @@ use std::marker::PhantomData;
 use serde::{Deserialize, Serialize};
 use shred_derive::SystemData;
 
-use amethyst_core::specs::prelude::{
+use amethyst_core::ecs::prelude::{
     Component, DenseVecStorage, Entity, FlaggedStorage, Read, ReadExpect, SystemData, WriteStorage,
 };
 use amethyst_error::Error;
 
-use crate::{Asset, AssetStorage, Format, Handle, Loader, Progress, ProgressCounter};
+use crate::{
+    Asset, AssetStorage, Format, Handle, Loader, Progress, ProgressCounter, SerializableFormat,
+};
 
 pub use self::system::PrefabLoaderSystem;
 
@@ -34,11 +36,15 @@ pub trait PrefabData<'a> {
     /// - `system_data`: `SystemData` needed to do the loading
     /// - `entities`: Some components need access to the entities that was created as part of the
     ///               full prefab, for linking purposes, so this contains all those `Entity`s.
+    /// - `children`: Entities that need access to the `Hierarchy`  in this function won't be able
+    ///               to access it yet, since it is only updated after this function runs. As a work-
+    ///               around, this slice includes all hierarchical children of the entity being passed.
     fn add_to_entity(
         &self,
         entity: Entity,
         system_data: &mut Self::SystemData,
         entities: &[Entity],
+        children: &[Entity],
     ) -> Result<Self::Result, Error>;
 
     /// Trigger asset loading for any sub assets.
@@ -161,6 +167,13 @@ impl<T> PrefabEntity<T> {
         self.data.get_or_insert_with(T::default)
     }
 
+    /// Get mutable access to the data
+    ///
+    /// If Option is `None`, insert an entry computed from a closure
+    pub fn data_or_insert_with(&mut self, func: impl FnOnce() -> T) -> &mut T {
+        self.data.get_or_insert_with(func)
+    }
+
     /// Trigger sub asset loading for the prefab entity
     pub fn load_sub_assets<'a>(
         &mut self,
@@ -214,6 +227,11 @@ impl<T> Prefab<T> {
         self.entities.len()
     }
 
+    /// Returns `true` if the prefab contains no entities.
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+    }
+
     /// Create a new entity in the prefab, with no data and no parent
     pub fn new_entity(&mut self) -> usize {
         self.add(None, None)
@@ -241,6 +259,17 @@ impl<T> Prefab<T> {
         T: Default,
     {
         self.entities[index].data_or_default()
+    }
+
+    /// Get mutable access to the data in the `PrefabEntity` with the given index
+    ///
+    /// If data is None, this will insert a value for `T` computed with a closure
+    ///
+    /// ### Panics
+    ///
+    /// If the given index do not have a `PrefabEntity`
+    pub fn data_or_insert_with(&mut self, index: usize, func: impl FnOnce() -> T) -> &mut T {
+        self.entities[index].data_or_insert_with(func)
     }
 
     /// Check if sub asset loading have been triggered
@@ -326,25 +355,28 @@ where
 ///
 /// - `A`: `Asset`,
 /// - `F`: `Format` for loading `A`
-#[derive(Clone, Deserialize, Serialize)]
-pub enum AssetPrefab<A, F>
+// TODO: Add a debug impl for this that uses Filename correctly by default
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum AssetPrefab<A, F = Box<dyn SerializableFormat<<A as Asset>::Data>>>
 where
     A: Asset,
-    F: Format<A>,
+    // A::Data: FormatRegisteredData,
+    F: Format<A::Data>,
 {
     /// From existing handle
     #[serde(skip)]
     Handle(Handle<A>),
-
-    /// From file, (name, format, format options)
-    File(String, F, F::Options),
+    /// From file, (name, format)
+    File(String, F),
+    /// Placeholder during loading
+    #[serde(skip)]
+    Placeholder,
 }
 
 impl<'a, A, F> PrefabData<'a> for AssetPrefab<A, F>
 where
     A: Asset,
-    F: Format<A> + Clone,
-    F::Options: Clone,
+    F: Format<A::Data>,
 {
     type SystemData = (
         ReadExpect<'a, Loader>,
@@ -359,10 +391,11 @@ where
         entity: Entity,
         system_data: &mut Self::SystemData,
         _: &[Entity],
+        _: &[Entity],
     ) -> Result<Handle<A>, Error> {
         let handle = match *self {
             AssetPrefab::Handle(ref handle) => handle.clone(),
-            AssetPrefab::File(..) => unreachable!(),
+            _ => unreachable!(),
         };
         Ok(system_data
             .1
@@ -373,25 +406,17 @@ where
     fn load_sub_assets(
         &mut self,
         progress: &mut ProgressCounter,
-        system_data: &mut Self::SystemData,
+        (loader, _, storage): &mut Self::SystemData,
     ) -> Result<bool, Error> {
-        let handle = if let AssetPrefab::File(ref name, ref format, ref options) = *self {
-            Some(system_data.0.load(
-                name.as_ref(),
-                format.clone(),
-                options.clone(),
-                progress,
-                &system_data.2,
-            ))
-        } else {
-            None
+        let (ret, next) = match std::mem::replace(self, AssetPrefab::Placeholder) {
+            AssetPrefab::File(name, format) => {
+                let handle = loader.load(name, format, progress, storage);
+                (true, AssetPrefab::Handle(handle))
+            }
+            slot => (false, slot),
         };
-        if let Some(handle) = handle {
-            *self = AssetPrefab::Handle(handle);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        *self = next;
+        Ok(ret)
     }
 }
 
@@ -403,7 +428,7 @@ where
 ///
 /// ```rust,ignore
 /// let prefab_handle = world.exec(|loader: PrefabLoader<SomePrefab>| {
-///     loader.load("prefab.ron", RonFormat, (), ());
+///     loader.load("prefab.ron", RonFormat, ());
 /// });
 /// ```
 #[derive(SystemData)]
@@ -420,20 +445,13 @@ where
     T: Send + Sync + 'static,
 {
     /// Load prefab from source
-    pub fn load<F, N, P>(
-        &self,
-        name: N,
-        format: F,
-        options: F::Options,
-        progress: P,
-    ) -> Handle<Prefab<T>>
+    pub fn load<F, N, P>(&self, name: N, format: F, progress: P) -> Handle<Prefab<T>>
     where
-        F: Format<Prefab<T>>,
+        F: Format<<Prefab<T> as Asset>::Data>,
         N: Into<String>,
         P: Progress,
     {
-        self.loader
-            .load(name, format, options, progress, &self.storage)
+        self.loader.load(name, format, progress, &self.storage)
     }
 
     /// Load prefab from explicit data
@@ -452,8 +470,8 @@ mod tests {
     use rayon::ThreadPoolBuilder;
 
     use amethyst_core::{
-        specs::{Builder, RunNow, World},
-        GlobalTransform, Time, Transform,
+        ecs::{Builder, RunNow, World},
+        Time, Transform,
     };
 
     use crate::Loader;
@@ -485,9 +503,6 @@ mod tests {
             Some(&Transform::default()),
             world.read_storage().get(root_entity)
         );
-        assert!(world
-            .read_storage::<GlobalTransform>()
-            .get(root_entity)
-            .is_some());
+        assert!(world.read_storage::<Transform>().get(root_entity).is_some());
     }
 }

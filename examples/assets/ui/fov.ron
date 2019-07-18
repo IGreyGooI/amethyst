@@ -11,7 +11,7 @@ Container(
     ),
     background: None,
     children: [
-        Text(
+        Label(
             transform: (
                 id: "screen_aspect",
                 anchor: TopLeft,
@@ -26,10 +26,10 @@ Container(
                 align: MiddleLeft,
                 font_size: 25.0,
                 color: (1.0, 1.0, 1.0, 1.0),
-                font: File("font/square.ttf", Ttf, ()),
+                font: File("font/square.ttf", ("TTF", ())),
             ),
         ),
-        Text(
+        Label(
             transform: (
                 id: "camera_aspect",
                 anchor: MiddleLeft,
@@ -44,10 +44,10 @@ Container(
                 align: MiddleLeft,
                 font_size: 25.0,
                 color: (1.0, 1.0, 1.0, 1.0),
-                font: File("font/square.ttf", Ttf, ()),
+                font: File("font/square.ttf", ("TTF", ())),
             ),
         ),
-        Text(
+        Label(
             transform: (
                 id: "camera_fov",
                 anchor: BottomLeft,
@@ -62,7 +62,7 @@ Container(
                 align: MiddleLeft,
                 font_size: 25.0,
                 color: (1.0, 1.0, 1.0, 1.0),
-                font: File("font/square.ttf", Ttf, ()),
+                font: File("font/square.ttf", ("TTF", ())),
             ),
         ),
     ],

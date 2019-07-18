@@ -9,10 +9,21 @@
 // Parts copied from failure:
 // https://github.com/rust-lang-nursery/failure
 
-#![warn(missing_docs)]
+#![warn(
+    missing_debug_implementations,
+    missing_docs,
+    rust_2018_idioms,
+    rust_2018_compatibility
+)]
+#![warn(clippy::all)]
+#![allow(clippy::new_without_default)]
 
 pub use backtrace::Backtrace;
-use std::{borrow::Cow, env, error, ffi, fmt, result, sync::atomic};
+use std::{
+    borrow::Cow,
+    env, error, fmt, result,
+    sync::atomic::{self, AtomicUsize},
+};
 
 const RUST_BACKTRACE: &str = "RUST_BACKTRACE";
 
@@ -300,8 +311,8 @@ where
 }
 
 /// Test if backtracing is enabled.
-fn is_backtrace_enabled<F: Fn(&str) -> Option<ffi::OsString>>(get_var: F) -> bool {
-    match get_var(RUST_BACKTRACE) {
+fn is_backtrace_enabled() -> bool {
+    match env::var_os(RUST_BACKTRACE) {
         Some(ref val) if val != "0" => true,
         _ => false,
     }
@@ -310,13 +321,13 @@ fn is_backtrace_enabled<F: Fn(&str) -> Option<ffi::OsString>>(get_var: F) -> boo
 // 0: unchecked
 // 1: disabled
 // 2: enabled
-static BACKTRACE_STATUS: atomic::AtomicUsize = atomic::ATOMIC_USIZE_INIT;
+static BACKTRACE_STATUS: AtomicUsize = AtomicUsize::new(0);
 
 /// Constructs a new backtrace, if backtraces are enabled.
 fn new_backtrace() -> Option<Backtrace> {
     match BACKTRACE_STATUS.load(atomic::Ordering::Relaxed) {
         0 => {
-            let enabled = is_backtrace_enabled(|var| env::var_os(var));
+            let enabled = is_backtrace_enabled();
 
             BACKTRACE_STATUS.store(enabled as usize + 1, atomic::Ordering::Relaxed);
 
@@ -413,6 +424,7 @@ mod tests {
 
         BACKTRACE_STATUS.store(2, atomic::Ordering::Relaxed);
 
+        #[allow(warnings)]
         #[inline(never)]
         #[no_mangle]
         fn a_really_unique_name_42() -> Error {
@@ -431,8 +443,7 @@ mod tests {
 
         assert!(frame_names
             .iter()
-            .find(|n| n.ends_with("a_really_unique_name_42"))
-            .is_some());
+            .any(|n| n.ends_with("a_really_unique_name_42")));
 
         // Test disabled.
         BACKTRACE_STATUS.store(1, atomic::Ordering::Relaxed);

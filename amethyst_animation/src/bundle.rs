@@ -1,5 +1,3 @@
-use std::{hash::Hash, marker};
-
 use crate::{
     resources::AnimationSampling,
     skinning::VertexSkinningSystem,
@@ -7,18 +5,18 @@ use crate::{
         AnimationControlSystem, AnimationProcessor, SamplerInterpolationSystem, SamplerProcessor,
     },
 };
-use amethyst_error::Error;
-
 use amethyst_core::{
-    specs::prelude::{Component, DispatcherBuilder},
+    ecs::prelude::{Component, DispatcherBuilder},
     SystemBundle,
 };
+use amethyst_error::Error;
+use std::{hash::Hash, marker};
 
 /// Bundle for vertex skinning
 ///
 /// This registers `VertexSkinningSystem`.
 /// Note that the user must make sure this system runs after `TransformSystem`
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct VertexSkinningBundle<'a> {
     dep: &'a [&'a str],
 }
@@ -55,7 +53,7 @@ impl<'a, 'b, 'c> SystemBundle<'a, 'b> for VertexSkinningBundle<'c> {
 /// ### Type parameters:
 ///
 /// - `T`: the component type that sampling should be applied to
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SamplingBundle<'a, T> {
     name: &'a str,
     dep: &'a [&'a str],
@@ -106,7 +104,7 @@ where
 /// - `I`: identifier type for running animations, only one animation can be run at the same time
 ///        with the same id (per entity)
 /// - `T`: the component type that sampling should be applied to
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct AnimationBundle<'a, I, T> {
     animation_name: &'a str,
     sampling_name: &'a str,

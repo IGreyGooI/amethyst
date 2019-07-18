@@ -4,7 +4,7 @@ This guide explains how to define a new asset type to be used in an Amethyst app
 
 1. Define the type and handle for your asset.
 
-    ```rust,edition2018,no_run,noplaypen
+    ```rust,edition2018,ignore,noplaypen
     # extern crate amethyst;
     # extern crate serde_derive;
     #
@@ -39,7 +39,7 @@ This guide explains how to define a new asset type to be used in an Amethyst app
 
     * An enum with different variants &ndash; each for a different data layout:
 
-        ```rust,edition2018,no_run,noplaypen
+        ```rust,edition2018,ignore,noplaypen
         # extern crate serde_derive;
         #
         # use serde_derive::{Deserialize, Serialize};
@@ -246,7 +246,6 @@ This guide explains how to define a new asset type to be used in an Amethyst app
             let energy_blast_handle = loader.load(
                 "energy_blast.ron",
                 RonFormat,
-                (),
                 &mut self.progress_counter,
                 &data.world.read_resource::<AssetStorage<EnergyBlast>>(),
             );
@@ -277,6 +276,6 @@ This guide explains how to define a new asset type to be used in an Amethyst app
     If the asset data is stored in a format that is not supported by Amethyst, a [custom format][bk_custom_formats] can be implemented and provided to the `Loader` to load the asset data.
 
 [bk_custom_formats]: how_to_define_custom_formats.html
-[doc_asset]: https://www.amethyst.rs/doc/latest/doc/amethyst_assets/trait.Asset.html
-[doc_processor_system]: https://www.amethyst.rs/doc/latest/doc/amethyst_assets/struct.Processor.html
+[doc_asset]: https://docs-src.amethyst.rs/stable/amethyst_assets/trait.Asset.html
+[doc_processor_system]: https://docs-src.amethyst.rs/stable/amethyst_assets/struct.Processor.html
 [gh_contributing]: https://github.com/amethyst/amethyst/blob/master/docs/CONTRIBUTING.md

@@ -1,7 +1,8 @@
+/*!
+    @import /amethyst_window/src/config.rs#DisplayConfig
+    DisplayConfig
+*/
+
 (
-  fullscreen: false,
-  multisampling: 0,
   title: "AutoFov Example",
-  visibility: true,
-  vsync: false,
 )

@@ -1,7 +1,7 @@
 //! ECS audio bundles
 
 use amethyst_assets::Processor;
-use amethyst_core::{bundle::SystemBundle, specs::prelude::DispatcherBuilder};
+use amethyst_core::{bundle::SystemBundle, ecs::prelude::DispatcherBuilder};
 use amethyst_error::Error;
 
 use crate::{output::Output, source::*, systems::AudioSystem};
@@ -12,7 +12,8 @@ use crate::{output::Output, source::*, systems::AudioSystem};
 ///
 /// `DjSystem` must be added separately if you want to use our background music system.
 ///
-#[derive(Default)]
+/// The generic N type should be the same as the one in `Transform`.
+#[derive(Default, Debug)]
 pub struct AudioBundle(Output);
 
 impl<'a, 'b> SystemBundle<'a, 'b> for AudioBundle {

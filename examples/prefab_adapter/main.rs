@@ -52,6 +52,7 @@ impl<'a> PrefabData<'a> for PositionPrefab {
         entity: Entity,
         positions: &mut Self::SystemData,
         _entities: &[Entity],
+        _children: &[Entity],
     ) -> Result<(), Error> {
         let position = match *self {
             PositionPrefab::Pos3f { x, y, z } => (x, y, z).into(),
@@ -78,7 +79,6 @@ impl SimpleState for CustomPrefabState {
             loader.load(
                 "prefab/prefab_adapter.ron",
                 RonFormat,
-                (),
                 &mut self.progress_counter,
             )
         });
@@ -119,7 +119,7 @@ impl CustomPrefabState {
             prefab
                 .entities()
                 .for_each(|entity| println!("{:?}", entity));
-            println!("");
+            println!();
         }
     }
 

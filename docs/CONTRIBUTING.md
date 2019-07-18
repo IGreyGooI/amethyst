@@ -42,7 +42,8 @@ and try our best to resolve it.
 
 So, you want to write some code? Great!
 
-To begin hacking, fork the repository to your account and `git clone` the forked
+To begin hacking, make sure you have [git lfs](https://git-lfs.github.com/)
+installed, fork the repository to your account and `git clone` the forked
 copy to your local machine. On clone you will be on the *master* branch. This
 is the branch that contains all new work that has not been released yet. If you
 are adding a new feature to amethyst then you want to base your work off of this
@@ -50,6 +51,8 @@ branch. Otherwise, if you are attemping to fix something in an older release you
 will have to base your work off of a released tag. This can be done after a clone
 by running `git checkout TAG` where `TAG` is a released tag eg `v0.8.0`. Now that
 you have the latest code you can start contributing.
+
+Contributors should be familiar with the [Git Style Guide](https://github.com/agis/git-style-guide) and [Commit Message Guidelines](https://gist.github.com/robertpainsi/b632364184e70900af4ab688decf6f53).
 
 ### Submission Checklist
 
@@ -60,9 +63,10 @@ done the following things first:
    respective branch.
 2. You have processed your source code with `cargo fmt` (we use latest rustup stable).
 3. All of the following commands completed without errors.
-   * `cargo build`
-   * `cargo test --all`
-   * `cargo run --example {example-name}`
+   * `cargo build --features "empty"`
+   * `cargo test --all --features "empty"`
+   * `cargo run --example {example-name} --features YOUR_BACKEND`
+   * `mdbook test book -L target/debug/deps`
 4. You have granted non-exclusive right to your source code under both the
    [MIT License][lm] and the [Apache License 2.0][la]. Unless you explicitly
    state otherwise, any contribution intentionally submitted for inclusion in
@@ -78,6 +82,10 @@ done the following things first:
 [lm]: LICENSE-MIT
 [la]: LICENSE-APACHE
 [rustfmt]: https://github.com/rust-lang-nursery/rustfmt
+
+Note that if you do not have mdbook already installed you may do so with `cargo install mdbook`. 
+If you find dependency resolution problems when testing mdbook, 
+you may have to run `cargo clean` and `cargo build` again before retrying the `mdbook test` command.
 
 > If you want to be publicly known as an author, feel free to add your name
 > and/or GitHub username to the AUTHORS.md file in your pull request.
@@ -203,8 +211,8 @@ There are two types of documentation in Amethyst you can work on:
 1. [API documentation][ad]
 2. [The Amethyst book][ab]
 
-[ad]: https://www.amethyst.rs/doc/master/doc/amethyst/
-[ab]: https://www.amethyst.rs/book/master/
+[ad]: https://docs-src.amethyst.rs/master/amethyst/
+[ab]: https://book.amethyst.rs/master/
 
 Our Rust API documentation is generated directly from source code comments
 marked with either `///` or `//!` using  a tool called Rustdoc. See
@@ -274,6 +282,8 @@ Then you can hit load button and choose `thread_profile.json` file.
   * [Rust By Example][re] - Get acquainted with Rust through a series of small
     code samples.
   * [The Rust Programming Language][rl] - The canonical online book about Rust.
+* Git
+  * [How to write a Git commit message](https://chris.beams.io/posts/git-commit/)
 
 [di]: https://discord.gg/amethyst
 [bs]: https://www.kth.se/social/upload/5289cb3ff276542440dd668c/bitsquid-behind-the-scenes.pdf

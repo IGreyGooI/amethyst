@@ -1,11 +1,12 @@
 //! The core engine framework.
 
-use std::{marker::PhantomData, path::Path, sync::Arc, time::Duration};
+use std::{env, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 
 use crate::shred::Resource;
 use derivative::Derivative;
-use log::{info, log_enabled, trace, Level};
+use log::{debug, info, log_enabled, trace, Level};
 use rayon::ThreadPoolBuilder;
+use sentry::integrations::panic::register_panic_handler;
 use winit::Event;
 
 #[cfg(feature = "profiler")]
@@ -18,14 +19,14 @@ use crate::{
         frame_limiter::{FrameLimiter, FrameRateLimitConfig, FrameRateLimitStrategy},
         shrev::{EventChannel, ReaderId},
         timing::{Stopwatch, Time},
-        EventReader, Named,
+        ArcThreadPool, EventReader, Named,
     },
     ecs::{
         common::Errors,
         prelude::{Component, Read, World, Write},
     },
     error::Error,
-    game_data::DataInit,
+    game_data::{DataDispose, DataInit},
     state::{State, StateData, StateMachine, TransEvent},
     state_event::{StateEvent, StateEventReader},
     ui::UiEvent,
@@ -46,7 +47,7 @@ use crate::{
 #[derivative(Debug)]
 pub struct CoreApplication<'a, T, E = StateEvent, R = StateEventReader>
 where
-    T: 'static,
+    T: DataDispose + 'static,
     E: 'static,
 {
     /// The world
@@ -132,7 +133,7 @@ pub type Application<'a, T> = CoreApplication<'a, T, StateEvent, StateEventReade
 
 impl<'a, T, E, R> CoreApplication<'a, T, E, R>
 where
-    T: 'static,
+    T: DataDispose + 'static,
     E: Clone + Send + Sync + 'static,
 {
     /// Creates a new Application with the given initial game state.
@@ -220,12 +221,23 @@ where
     where
         for<'b> R: EventReader<'b, Event = E>,
     {
+        let _sentry_guard = if let Some(dsn) = option_env!("SENTRY_DSN") {
+            let guard = sentry::init(dsn);
+            register_panic_handler();
+            Some(guard)
+        } else {
+            None
+        };
+
         self.initialize();
         self.world.write_resource::<Stopwatch>().start();
         while self.states.is_running() {
             self.advance_frame();
-
-            self.world.write_resource::<FrameLimiter>().wait();
+            {
+                #[cfg(feature = "profiler")]
+                profile_scope!("frame_limiter wait");
+                self.world.write_resource::<FrameLimiter>().wait();
+            }
             {
                 let elapsed = self.world.read_resource::<Stopwatch>().elapsed();
                 let mut time = self.world.write_resource::<Time>();
@@ -254,7 +266,7 @@ where
         if self.ignore_window_close {
             false
         } else {
-            use crate::renderer::WindowEvent;
+            use crate::winit::WindowEvent;
             let world = &mut self.world;
             let reader_id = &mut self.event_reader_id;
             world.exec(|ev: Read<'_, EventChannel<Event>>| {
@@ -269,16 +281,14 @@ where
                         } else {
                             false
                         }
+                    } else if let Event::WindowEvent {
+                        event: WindowEvent::CloseRequested,
+                        ..
+                    } = e
+                    {
+                        true
                     } else {
-                        if let Event::WindowEvent {
-                            event: WindowEvent::CloseRequested,
-                            ..
-                        } = e
-                        {
-                            true
-                        } else {
-                            false
-                        }
+                        false
                     }
                 })
             })
@@ -341,18 +351,21 @@ where
             }
         }
         {
-            let do_fixed = {
-                let time = self.world.write_resource::<Time>();
-                time.last_fixed_update().elapsed() >= time.fixed_time()
-            };
             #[cfg(feature = "profiler")]
             profile_scope!("fixed_update");
-            if do_fixed {
+
+            {
+                self.world.write_resource::<Time>().start_fixed_update();
+            }
+            while { self.world.write_resource::<Time>().step_fixed_update() } {
                 self.states
                     .fixed_update(StateData::new(&mut self.world, &mut self.data));
+            }
+            {
                 self.world.write_resource::<Time>().finish_fixed_update();
             }
-
+        }
+        {
             #[cfg(feature = "profiler")]
             profile_scope!("update");
             self.states
@@ -372,13 +385,15 @@ where
     /// Cleans up after the quit signal is received.
     fn shutdown(&mut self) {
         info!("Engine is shutting down");
-
-        // Placeholder.
+        self.data.dispose(&mut self.world);
     }
 }
 
 #[cfg(feature = "profiler")]
-impl<'a, T, E, R> Drop for CoreApplication<'a, T, E, R> {
+impl<'a, T, E, R> Drop for CoreApplication<'a, T, E, R>
+where
+    T: DataDispose,
+{
     fn drop(&mut self) {
         // TODO: Specify filename in config.
         use crate::utils::application_root_dir;
@@ -393,6 +408,7 @@ impl<'a, T, E, R> Drop for CoreApplication<'a, T, E, R> {
 /// using a custom set of configuration. This is the normal way an
 /// [`Application`](struct.Application.html)
 /// object is created.
+#[allow(missing_debug_implementations)]
 pub struct ApplicationBuilder<S, T, E, R> {
     // config: Config,
     initial_state: S,
@@ -404,7 +420,7 @@ pub struct ApplicationBuilder<S, T, E, R> {
 
 impl<S, T, E, X> ApplicationBuilder<S, T, E, X>
 where
-    T: 'static,
+    T: DataDispose + 'static,
 {
     /// Creates a new [ApplicationBuilder](struct.ApplicationBuilder.html) instance
     /// that wraps the initial_state. This is the more verbose way of initializing
@@ -477,6 +493,10 @@ where
         info!("Version: {}", env!("CARGO_PKG_VERSION"));
         info!("Platform: {}", env!("VERGEN_TARGET_TRIPLE"));
         info!("Amethyst git commit: {}", env!("VERGEN_SHA"));
+        if let Some(sentry) = option_env!("SENTRY_DSN") {
+            info!("Sentry DSN: {}", sentry);
+        }
+
         let rustc_meta = rustc_version_runtime::version_meta();
         info!(
             "Rustc version: {} {:?}",
@@ -486,6 +506,15 @@ where
             info!("Rustc git commit: {}", hash);
         }
 
+        let thread_count: Option<usize> = env::var("AMETHYST_NUM_THREADS")
+            .as_ref()
+            .map(|s| {
+                s.as_str()
+                    .parse()
+                    .expect("AMETHYST_NUM_THREADS was provided but is not a valid number!")
+            })
+            .ok();
+
         let mut world = World::new();
 
         let thread_pool_builder = ThreadPoolBuilder::new();
@@ -493,7 +522,16 @@ where
         let thread_pool_builder = thread_pool_builder.start_handler(|_index| {
             register_thread_with_profiler();
         });
-        let pool = thread_pool_builder.build().map(Arc::new)?;
+        let pool: ArcThreadPool;
+        if let Some(thread_count) = thread_count {
+            debug!("Running Amethyst with fixed thread pool: {}", thread_count);
+            pool = thread_pool_builder
+                .num_threads(thread_count)
+                .build()
+                .map(Arc::new)?;
+        } else {
+            pool = thread_pool_builder.build().map(Arc::new)?;
+        }
         world.add_resource(Loader::new(path.as_ref().to_owned(), pool.clone()));
         world.add_resource(pool);
         world.add_resource(EventChannel::<Event>::with_capacity(2000));
@@ -507,7 +545,7 @@ where
 
         world.register::<Named>();
 
-        Ok(ApplicationBuilder {
+        Ok(Self {
             initial_state,
             world,
             ignore_window_close: false,
@@ -553,7 +591,7 @@ where
     ///     // There are a few common containers, VecStorage and HashMapStorage
     ///     // are the most common used.
     ///     //
-    ///     // See the documentation on the specs::Storage trait for more information.
+    ///     // See the documentation on the ecs::Storage trait for more information.
     ///     // https://docs.rs/specs/0.9.5/specs/struct.Storage.html
     ///     type Storage = HashMapStorage<Velocity>;
     /// }
@@ -651,8 +689,8 @@ where
     ///
     /// ~~~no_run
     /// use amethyst::prelude::*;
-    /// use amethyst::assets::{Directory, Loader};
-    /// use amethyst::renderer::ObjFormat;
+    /// use amethyst::assets::{Directory, Loader, Handle};
+    /// use amethyst::renderer::{Mesh, formats::mesh::ObjFormat};
     /// use amethyst::ecs::prelude::World;
     ///
     /// let mut game = Application::build("assets/", LoadingState)
@@ -670,8 +708,8 @@ where
     ///
     ///         let loader = data.world.read_resource::<Loader>();
     ///         // Load a teapot mesh from the directory that registered above.
-    ///         let mesh = loader.load_from("teapot", ObjFormat, (), "custom_directory",
-    ///                                     (), &storage);
+    ///         let mesh: Handle<Mesh> =
+    ///             loader.load_from("teapot", ObjFormat, "custom_directory", (), &storage);
     ///     }
     /// }
     /// ~~~
@@ -705,8 +743,8 @@ where
     ///
     /// ~~~no_run
     /// use amethyst::prelude::*;
-    /// use amethyst::assets::{Directory, Loader};
-    /// use amethyst::renderer::ObjFormat;
+    /// use amethyst::assets::{Directory, Loader, Handle};
+    /// use amethyst::renderer::{Mesh, formats::mesh::ObjFormat};
     /// use amethyst::ecs::prelude::World;
     ///
     /// let mut game = Application::build("assets/", LoadingState)
@@ -724,7 +762,7 @@ where
     ///
     ///         let loader = data.world.read_resource::<Loader>();
     ///         // Load a teapot mesh from the directory that registered above.
-    ///         let mesh = loader.load("teapot", ObjFormat, (), (), &storage);
+    ///         let mesh: Handle<Mesh> = loader.load("teapot", ObjFormat, (), &storage);
     ///     }
     /// }
     /// ~~~

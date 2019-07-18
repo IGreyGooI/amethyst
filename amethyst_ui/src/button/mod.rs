@@ -1,36 +1,30 @@
-mod actions;
-mod builder;
-mod retrigger;
-mod system;
-
 pub use self::{
     actions::{UiButtonAction, UiButtonActionType},
     builder::{UiButtonBuilder, UiButtonBuilderResources},
     retrigger::{UiButtonActionRetrigger, UiButtonActionRetriggerSystem},
     system::UiButtonSystem,
 };
-///! A clickable button.
-use amethyst_core::specs::prelude::{Component, DenseVecStorage};
+use crate::{define_widget, Interactable, UiSoundRetrigger, UiText, UiTransform};
+use amethyst_assets::Handle;
+use amethyst_core::Parent;
+use amethyst_rendy::Texture;
 
-use serde::{Deserialize, Serialize};
+mod actions;
+mod builder;
+mod retrigger;
+mod system;
 
-/// A clickable button, this must be paired with a `TextureHandle`
-/// and this entity must have a child entity with a `UiText`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct UiButton {
-    /// Default text color
-    text_color: [f32; 4],
-}
+define_widget!(UiButton =>
+    entities: [text_entity, image_entity]
+    components: [
+        (has UiTransform as position on image_entity),
+        (has UiTransform as text_position on text_entity),
+        (has Handle<Texture> as texture on image_entity),
+        (has Interactable as mouse_reactive on image_entity),
+        (has UiText as text on text_entity),
 
-impl UiButton {
-    /// A constructor for this component.  It's recommended to use
-    /// either a prefab or `UiButtonBuilder` rather than this function
-    /// if possible.
-    pub fn new(text_color: [f32; 4]) -> Self {
-        Self { text_color }
-    }
-}
-
-impl Component for UiButton {
-    type Storage = DenseVecStorage<Self>;
-}
+        (maybe_has Parent as parent on image_entity),
+        (maybe_has UiButtonActionRetrigger as action_retrigger on image_entity),
+        (maybe_has UiSoundRetrigger as sound_retrigger on image_entity)
+    ]
+);

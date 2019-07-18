@@ -78,7 +78,7 @@ impl<'a> System<'a> for WalkPlayerUp {
     type SystemData = WriteStorage<'a, Transform>;
 
     fn run(&mut self, mut transforms: Self::SystemData) {
-        transforms.get_mut(self.player).unwrap().translate_y(0.1);
+        transforms.get_mut(self.player).unwrap().prepend_translation_y(0.1);
     }
 }
 ```
@@ -91,7 +91,7 @@ However, this approach is pretty rare because most of the time you don't know wh
 
 ### Getting all entities with specific components
 
-Most of the time, you will want to perform logic on all entities with a specific components, or even all entities with a selection of components.
+Most of the time, you will want to perform logic on all entities with a specific component, or even all entities with a selection of components.
 
 This is possible using the `join` method. You may be familiar with joining operations if you have ever worked with databases. The `join` method takes multiple storages, and iterates over all entities that have a component in each of those storages.
 It works like an "AND" gate. It will return an iterator containing a tuple of all the requested components if they are **ALL** on the same entity.
@@ -123,7 +123,7 @@ impl<'a> System<'a> for MakeObjectsFall {
     fn run(&mut self, (mut transforms, falling): Self::SystemData) {
         for (mut transform, _) in (&mut transforms, &falling).join() {
             if transform.translation().y > 0.0 {
-                transform.translate_y(-0.1);
+                transform.prepend_translation_y(-0.1);
             }
         }
     }
@@ -161,7 +161,7 @@ impl<'a> System<'a> for NotFallingObjects {
     fn run(&mut self, (mut transforms, falling): Self::SystemData) {
         for (mut transform, _) in (&mut transforms, !&falling).join() {
             // If they don't fall, why not make them go up!
-            transform.translate_y(0.1);
+            transform.prepend_translation_y(0.1);
         }
     }
 }
@@ -251,7 +251,7 @@ impl<'a> System<'a> for MakeObjectsFall {
     fn run(&mut self, (entities, mut transforms, falling): Self::SystemData) {
         for (e, mut transform, _) in (&*entities, &mut transforms, &falling).join() {
             if transform.translation().y > 0.0 {
-                transform.translate_y(-0.1);
+                transform.prepend_translation_y(-0.1);
             } else {
                 entities.delete(e);
             }
@@ -439,14 +439,14 @@ system:
 use amethyst::{
     prelude::*,
     ecs::{System, prelude::*},
-    input::InputHandler,
+    input::{InputHandler, StringBindings},
 };
 
 struct MyGameplaySystem;
 
 impl<'s> System<'s> for MyGameplaySystem {
     type SystemData = (
-        Read<'s, InputHandler<String, String>>,
+        Read<'s, InputHandler<StringBindings>>,
         Write<'s, Game>,
     );
 

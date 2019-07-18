@@ -1,5 +1,5 @@
 use amethyst::{
-    core::transform::Transform,
+    core::Transform,
     ecs::prelude::{Join, ReadExpect, System, Write, WriteStorage},
     ui::UiText,
 };
@@ -47,7 +47,7 @@ impl<'s> System<'s> for WinnerSystem {
             if did_hit {
                 // Reset the ball.
                 ball.velocity[0] = -ball.velocity[0];
-                transform.set_x(ARENA_WIDTH / 2.0);
+                transform.set_translation_x(ARENA_WIDTH / 2.0);
 
                 // Print the score board.
                 println!(

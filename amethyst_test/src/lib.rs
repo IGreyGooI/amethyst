@@ -1,5 +1,11 @@
-#![deny(missing_docs)]
-#![deny(missing_debug_implementations)]
+#![warn(
+    missing_debug_implementations,
+    missing_docs,
+    rust_2018_idioms,
+    rust_2018_compatibility
+)]
+#![warn(clippy::all)]
+#![allow(clippy::new_without_default)]
 
 //! Test harness to support testing of Amethyst types, including:
 //!
@@ -81,16 +87,29 @@
 //!     // Start with no bundles
 //!     AmethystApplication::blank();
 //!
-//!     // Start with the Transform, Input, and UI bundles
-//!     // The type parameters here are the Axis and Action types for the `InputBundle` and
-//!     // `UiBundle`.
-//!     AmethystApplication::ui_base::<String, String>();
+//!     // Start with the following bundles:
+//!     //
+//!     // * `TransformBundle`
+//!     // * `InputBundle`
+//!     // * `UiBundle`
+//!     //
+//!     // The type parameters here are the Axis and Action types for the
+//!     // `InputBundle` and `UiBundle`.
+//!     use amethyst::input::StringBindings;
+//!     AmethystApplication::ui_base::<StringBindings>();
 //!
-//!     // Start with the Animation, Transform, and Render bundles.
-//!     // If you want the Input and UI bundles, you can use the `.with_ui_bundles::<AX, AC>()`
-//!     // method.
-//!     let visibility = false; // Whether the window should be shown
-//!     AmethystApplication::render_base("test_name", visibility);
+//!     // If you need types from the rendering bundle, make sure you have
+//!     // the `"test-support"` feature enabled:
+//!     //
+//!     // ```toml
+//!     // # Cargo.toml
+//!     // amethyst = { version = "..", features = ["test-support"] }
+//!     // ```
+//!     //
+//!     // Then you can include the `RenderEmptyBundle`:
+//!     use amethyst::renderer::{types::DefaultBackend, RenderEmptyBundle};
+//!     AmethystApplication::blank()
+//!         .with_bundle(RenderEmptyBundle::<DefaultBackend>::new());
 //! }
 //! ```
 //!
@@ -293,7 +312,6 @@
 //! # }
 //! ```
 
-pub(crate) use crate::system_injection_bundle::SystemInjectionBundle;
 pub use crate::{
     amethyst_application::{AmethystApplication, HIDPI, SCREEN_HEIGHT, SCREEN_WIDTH},
     effect_return::EffectReturn,
@@ -304,6 +322,10 @@ pub use crate::{
         SequencerState,
     },
 };
+pub(crate) use crate::{
+    system_injection_bundle::SystemInjectionBundle,
+    thread_local_injection_bundle::ThreadLocalInjectionBundle,
+};
 
 mod amethyst_application;
 mod effect_return;
@@ -312,3 +334,4 @@ mod game_update;
 pub mod prelude;
 mod state;
 mod system_injection_bundle;
+mod thread_local_injection_bundle;

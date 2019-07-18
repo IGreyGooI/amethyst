@@ -1,6 +1,6 @@
 use amethyst_core::{
-    specs::{Entity, WriteStorage},
-    GlobalTransform, Named, Transform,
+    ecs::{Entity, WriteStorage},
+    Named, Transform,
 };
 use amethyst_error::Error;
 
@@ -18,9 +18,15 @@ where
         entity: Entity,
         system_data: &mut Self::SystemData,
         entities: &[Entity],
+        children: &[Entity],
     ) -> Result<Self::Result, Error> {
         if let Some(ref prefab) = self {
-            Ok(Some(prefab.add_to_entity(entity, system_data, entities)?))
+            Ok(Some(prefab.add_to_entity(
+                entity,
+                system_data,
+                entities,
+                children,
+            )?))
         } else {
             Ok(None)
         }
@@ -39,26 +45,8 @@ where
     }
 }
 
-impl<'a> PrefabData<'a> for GlobalTransform {
-    type SystemData = WriteStorage<'a, Self>;
-    type Result = ();
-
-    fn add_to_entity(
-        &self,
-        entity: Entity,
-        storage: &mut Self::SystemData,
-        _: &[Entity],
-    ) -> Result<(), Error> {
-        storage.insert(entity, self.clone()).map(|_| ())?;
-        Ok(())
-    }
-}
-
 impl<'a> PrefabData<'a> for Transform {
-    type SystemData = (
-        WriteStorage<'a, Transform>,
-        WriteStorage<'a, GlobalTransform>,
-    );
+    type SystemData = WriteStorage<'a, Transform>;
     type Result = ();
 
     fn add_to_entity(
@@ -66,9 +54,9 @@ impl<'a> PrefabData<'a> for Transform {
         entity: Entity,
         storages: &mut Self::SystemData,
         _: &[Entity],
+        _: &[Entity],
     ) -> Result<(), Error> {
-        storages.1.insert(entity, GlobalTransform::default())?;
-        storages.0.insert(entity, self.clone()).map(|_| ())?;
+        storages.insert(entity, self.clone()).map(|_| ())?;
         Ok(())
     }
 }
@@ -81,6 +69,7 @@ impl<'a> PrefabData<'a> for Named {
         &self,
         entity: Entity,
         storages: &mut Self::SystemData,
+        _: &[Entity],
         _: &[Entity],
     ) -> Result<(), Error> {
         storages.0.insert(entity, self.clone()).map(|_| ())?;
@@ -106,10 +95,11 @@ macro_rules! impl_data {
                 entity: Entity,
                 system_data: &mut Self::SystemData,
                 entities: &[Entity],
+                children: &[Entity],
             ) -> Result<(), Error> {
                 #![allow(unused_variables)]
                 $(
-                    self.$i.add_to_entity(entity, &mut system_data.$i, entities)?;
+                    self.$i.add_to_entity(entity, &mut system_data.$i, entities, children)?;
                 )*
                 Ok(())
             }
@@ -121,9 +111,7 @@ macro_rules! impl_data {
             ) -> Result<bool, Error> {
                 let mut ret = false;
                 $(
-                    if self.$i.load_sub_assets(progress, &mut system_data.$i)? {
-                        ret = true;
-                    }
+                    ret |= self.$i.load_sub_assets(progress, &mut system_data.$i)?;
                 )*
                 Ok(ret)
             }

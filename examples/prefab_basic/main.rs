@@ -39,7 +39,6 @@ impl SimpleState for CustomPrefabState {
             loader.load(
                 "prefab/prefab_basic.ron",
                 RonFormat,
-                (),
                 &mut self.progress_counter,
             )
         });
@@ -80,7 +79,7 @@ impl CustomPrefabState {
             prefab
                 .entities()
                 .for_each(|entity| println!("{:?}", entity));
-            println!("");
+            println!();
         }
     }
 

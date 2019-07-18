@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use amethyst_core::specs::prelude::{
+use amethyst_core::ecs::prelude::{
     Component, DenseVecStorage, Entities, Entity, FlaggedStorage, Join, ReadStorage,
 };
 
@@ -11,6 +11,7 @@ use super::{Anchor, ScaleMode, Stretch};
 
 /// Utility `SystemData` for finding UI entities based on `UiTransform` id
 #[derive(SystemData)]
+#[allow(missing_debug_implementations)]
 pub struct UiFinder<'a> {
     entities: Entities<'a>,
     storage: ReadStorage<'a, UiTransform>,
@@ -35,6 +36,8 @@ pub struct UiTransform {
     pub id: String,
     /// Indicates where the element sits, relative to the parent (or to the screen, if there is no parent)
     pub anchor: Anchor,
+    /// Indicates where the element sits, relative to itself
+    pub pivot: Anchor,
     /// If a child ui element needs to fill its parent this can be used to stretch it to the appropriate size.
     pub stretch: Stretch,
     /// X coordinate, 0 is the left edge of the screen. If scale_mode is set to pixel then the width of the
@@ -71,7 +74,7 @@ pub struct UiTransform {
     /// the next element (for example, the text on a button).
     pub opaque: bool,
     /// A private field to keep this from being initialized without new.
-    pd: PhantomData<u8>,
+    pd: PhantomData<()>,
 }
 
 impl UiTransform {
@@ -80,6 +83,7 @@ impl UiTransform {
     pub fn new(
         id: String,
         anchor: Anchor,
+        pivot: Anchor,
         x: f32,
         y: f32,
         z: f32,
@@ -89,6 +93,7 @@ impl UiTransform {
         UiTransform {
             id,
             anchor,
+            pivot,
             stretch: Stretch::NoStretch,
             local_x: x,
             local_y: y,
@@ -124,13 +129,13 @@ impl UiTransform {
 
     /// Renders this UI element by evaluating transform as a percentage of the parent size,
     /// rather than rendering it with pixel units.
-    pub fn as_percent(mut self) -> Self {
+    pub fn into_percent(mut self) -> Self {
         self.scale_mode = ScaleMode::Percent;
         self
     }
 
     /// Sets the opaque variable to false, allowing ui events to go through this ui element.
-    pub fn as_transparent(mut self) -> Self {
+    pub fn into_transparent(mut self) -> Self {
         self.opaque = false;
         self
     }
@@ -166,7 +171,16 @@ mod tests {
     use super::*;
     #[test]
     fn inside_local() {
-        let tr = UiTransform::new("".to_string(), Anchor::TopLeft, 0.0, 0.0, 0.0, 1.0, 1.0);
+        let tr = UiTransform::new(
+            "".to_string(),
+            Anchor::TopLeft,
+            Anchor::Middle,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+        );
         let pos = (-0.49, 0.20);
         assert!(tr.position_inside_local(pos.0, pos.1));
         let pos = (-1.49, 1.20);
@@ -175,7 +189,16 @@ mod tests {
 
     #[test]
     fn inside_global() {
-        let tr = UiTransform::new("".to_string(), Anchor::TopLeft, 0.0, 0.0, 0.0, 1.0, 1.0);
+        let tr = UiTransform::new(
+            "".to_string(),
+            Anchor::TopLeft,
+            Anchor::Middle,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+        );
         let pos = (-0.49, 0.20);
         assert!(tr.position_inside(pos.0, pos.1));
         let pos = (-1.49, 1.20);

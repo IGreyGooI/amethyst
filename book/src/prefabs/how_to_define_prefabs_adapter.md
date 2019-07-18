@@ -70,7 +70,7 @@ If you are attempting to adapt a more complex type, please choose the appropriat
     # extern crate amethyst;
     # extern crate serde;
     #
-    # use amethyst::core::nalgebra::{Orthographic3, Perspective3};
+    # use amethyst::core::math::{Orthographic3, Perspective3};
     # use serde::{Deserialize, Serialize};
     #
     #[derive(Clone, Deserialize, PartialEq, Serialize)]
@@ -131,6 +131,7 @@ If you are attempting to adapt a more complex type, please choose the appropriat
             entity: Entity,
             positions: &mut Self::SystemData,
             _entities: &[Entity],
+            _children: &[Entity],
         ) -> Result<(), Error> {
             let position = match *self {
                 PositionPrefab::Pos3f { x, y, z } => (x, y, z).into(),
@@ -166,10 +167,10 @@ cargo run --example prefab_adapter
 
 [`#[serde(default)]`]: https://serde.rs/container-attrs.html#default
 [`#[serde(deny_unknown_fields)]`]: https://serde.rs/container-attrs.html#deny_unknown_fields
-[`Camera`]: https://www.amethyst.rs/doc/latest/doc/amethyst_renderer/struct.Camera.html
-[`Component`]: https://www.amethyst.rs/doc/latest/doc/specs/trait.Component.html
-[`Prefab`]: https://www.amethyst.rs/doc/latest/doc/amethyst_assets/struct.Prefab.html
-[`PrefabData`]: https://www.amethyst.rs/doc/latest/doc/amethyst_assets/trait.PrefabData.html#impl-PrefabData%3C%27a%3E
-[`Projection`]: https://www.amethyst.rs/doc/latest/doc/amethyst_renderer/enum.Projection.html
+[`Camera`]: https://docs-src.amethyst.rs/stable/amethyst_renderer/struct.Camera.html
+[`Component`]: https://docs-src.amethyst.rs/stable/specs/trait.Component.html
+[`Prefab`]: https://docs-src.amethyst.rs/stable/amethyst_assets/struct.Prefab.html
+[`PrefabData`]: https://docs-src.amethyst.rs/stable/amethyst_assets/trait.PrefabData.html#impl-PrefabData%3C%27a%3E
+[`Projection`]: https://docs-src.amethyst.rs/stable/amethyst_renderer/enum.Projection.html
 [bk_prefab_prelude]: how_to_define_prefabs_prelude.html
 [repo_prefab_adapter]: https://github.com/amethyst/amethyst/tree/master/examples/prefab_adapter

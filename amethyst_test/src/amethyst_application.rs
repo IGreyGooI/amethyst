@@ -1,29 +1,26 @@
-use std::{hash::Hash, marker::PhantomData, path::PathBuf, sync::Mutex, thread};
+use std::{any::Any, marker::PhantomData, panic, path::PathBuf, sync::Mutex};
 
 use amethyst::{
     self,
-    animation::AnimationBundle,
     core::{transform::TransformBundle, EventReader, SystemBundle},
     ecs::prelude::*,
     error::Error,
-    input::InputBundle,
+    input::{BindingTypes, InputBundle},
     prelude::*,
-    renderer::{
-        DisplayConfig, DrawFlat2D, Material, Pipeline, PipelineBuilder, RenderBundle,
-        ScreenDimensions, SpriteRender, Stage, StageBuilder,
-    },
+    renderer::types::DefaultBackend,
     shred::Resource,
-    ui::{DrawUi, UiBundle},
+    ui::UiBundle,
     utils::application_root_dir,
+    window::ScreenDimensions,
     StateEventReader,
 };
 use boxfnonce::SendBoxFnOnce;
 use derivative::Derivative;
-use hetseq::Queue;
 use lazy_static::lazy_static;
 
 use crate::{
     CustomDispatcherStateBuilder, FunctionState, GameUpdate, SequencerState, SystemInjectionBundle,
+    ThreadLocalInjectionBundle,
 };
 
 type BundleAddFn = SendBoxFnOnce<
@@ -46,13 +43,6 @@ type BundleAddFn = SendBoxFnOnce<
 type FnResourceAdd = Box<dyn FnMut(&mut World) + Send>;
 type FnState<T, E> = SendBoxFnOnce<'static, (), Box<dyn State<T, E>>>;
 
-type DefaultPipeline = PipelineBuilder<
-    Queue<(
-        Queue<()>,
-        StageBuilder<Queue<(Queue<(Queue<()>, DrawFlat2D)>, DrawUi)>>,
-    )>,
->;
-
 /// Screen width used in predefined display configuration.
 pub const SCREEN_WIDTH: u32 = 800;
 /// Screen height used in predefined display configuration.
@@ -61,11 +51,11 @@ pub const SCREEN_HEIGHT: u32 = 600;
 /// This is typically one for a normal display and two for a retina display.
 pub const HIDPI: f64 = 1.;
 
-// Use a mutex to prevent multiple tests that open GL windows from running simultaneously, due to
-// race conditions causing failures in X.
-// <https://github.com/tomaka/glutin/issues/1038>
+// Use a mutex to prevent multiple tests that use Rendy from running simultaneously:
+//
+// <https://github.com/amethyst/rendy/issues/151>
 lazy_static! {
-    static ref X11_GL_MUTEX: Mutex<()> = Mutex::new(());
+    static ref RENDY_MEMORY_MUTEX: Mutex<()> = Mutex::new(());
 }
 
 /// Builder for an Amethyst application.
@@ -101,8 +91,6 @@ where
     state_fns: Vec<FnState<T, E>>,
     /// Game data and event type.
     state_data: PhantomData<(T, E, R)>,
-    /// Whether or not this application uses the `RenderBundle`.
-    render: bool,
 }
 
 impl AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader> {
@@ -114,7 +102,6 @@ impl AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReade
             resource_add_fns: Vec::new(),
             state_fns: Vec::new(),
             state_data: PhantomData,
-            render: false,
         }
     }
 
@@ -122,55 +109,15 @@ impl AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReade
     ///
     /// This also adds a `ScreenDimensions` resource to the `World` so that UI calculations can be
     /// done.
-    pub fn ui_base<AX, AC>(
-    ) -> AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader>
-    where
-        AX: Hash + Eq + Clone + Send + Sync + 'static,
-        AC: Hash + Eq + Clone + Send + Sync + 'static,
-    {
+    pub fn ui_base<B: BindingTypes>(
+    ) -> AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader> {
         AmethystApplication::blank()
             .with_bundle(TransformBundle::new())
-            .with_ui_bundles::<AX, AC>()
+            .with_ui_bundles::<B>()
             .with_resource(ScreenDimensions::new(SCREEN_WIDTH, SCREEN_HEIGHT, HIDPI))
     }
 
-    /// Returns an application with the Animation, Transform, and Render bundles.
-    ///
-    /// If you requite `InputBundle` and `UiBundle`, you can call the `with_ui_bundles::<AX, AC>()`
-    /// method.
-    ///
-    /// # Parameters
-    ///
-    /// * `test_name`: Name of the test, used to populate the window title.
-    /// * `visibility`: Whether the window should be visible.
-    ///
-    /// [stringly]: http://wiki.c2.com/?StringlyTyped
-    pub fn render_base<'name, N>(
-        test_name: N,
-        visibility: bool,
-    ) -> AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader>
-    where
-        N: Into<&'name str>,
-    {
-        AmethystApplication::blank()
-            .with_bundle(AnimationBundle::<u32, Material>::new(
-                "material_animation_control_system",
-                "material_sampler_interpolation_system",
-            ))
-            .with_bundle(AnimationBundle::<u32, SpriteRender>::new(
-                "sprite_render_animation_control_system",
-                "sprite_render_sampler_interpolation_system",
-            ))
-            .with_bundle(TransformBundle::new().with_dep(&[
-                "material_animation_control_system",
-                "material_sampler_interpolation_system",
-                "sprite_render_animation_control_system",
-                "sprite_render_sampler_interpolation_system",
-            ]))
-            .with_render_bundle(test_name, visibility)
-    }
-
-    /// Returns a `String` to `<crate_dir>/assets`.
+    /// Returns a `PathBuf` to `<crate_dir>/assets`.
     pub fn assets_dir() -> Result<PathBuf, Error> {
         Ok(application_root_dir()?.join("assets"))
     }
@@ -183,15 +130,8 @@ where
 {
     /// Returns the built Application.
     ///
-    /// If you are intending to call `.run()` on the `Application` in a test, be aware that on
-    /// Linux, this will cause a segfault when `RenderBundle` is added and GL is using software
-    /// rendering, such as when using Xvfb or when the following environmental variable is set:
-    /// `LIBGL_ALWAYS_SOFTWARE=1`.
-    ///
-    /// To avoid this, please call `.run()` instead of this method, which runs the application in a
-    /// separate thread and waits for it to end before returning.
-    ///
-    /// See <https://users.rust-lang.org/t/trouble-identifying-cause-of-segfault/18096>
+    /// If you are intending to run the `Application`, you can use the `run()` or `run_isolated()`
+    /// methods instead.
     pub fn build(self) -> Result<CoreApplication<'static, GameData<'static, 'static>, E, R>, Error>
     where
         for<'b> R: EventReader<'b, Event = E>,
@@ -205,9 +145,9 @@ where
     // However, `Self` has `PhantomData<T>`, which means we cannot send `self` to a thread. Instead
     // we have to take all of the other fields and send those through.
     //
-    // Need to `#[allow(type_complexity)]` because the type declaration would have unused type
+    // Need to `#[allow(clippy::type_complexity)]` because the type declaration would have unused type
     // parameters which causes a compilation failure.
-    #[allow(unknown_lints, type_complexity)]
+    #[allow(unknown_lints, clippy::type_complexity)]
     fn build_internal(
         (bundle_add_fns, resource_add_fns, state_fns): (
             Vec<BundleAddFn>,
@@ -254,47 +194,61 @@ where
     }
 
     /// Runs the application and returns `Ok(())` if nothing went wrong.
-    ///
-    /// This method should be called instead of the `.build()` method if the application is to be
-    /// run, as this avoids a segfault on Linux when using the GL software renderer.
     pub fn run(self) -> Result<(), Error>
     where
         for<'b> R: EventReader<'b, Event = E>,
     {
         let params = (self.bundle_add_fns, self.resource_add_fns, self.state_fns);
 
-        let render = self.render;
-
-        // Run in a sub thread due to mesa's threading issues with GL software rendering
-        // See: <https://users.rust-lang.org/t/trouble-identifying-cause-of-segfault/18096>
-        thread::spawn(move || -> Result<(), Error> {
-            amethyst::start_logger(Default::default());
-
-            if render {
-                let guard = X11_GL_MUTEX.lock().unwrap();
-
-                // Note: if this panics, the Mutex is poisoned.
-                // Unfortunately we cannot catch panics, as the application is `!UnwindSafe`
-                //
-                // We have to build the application after acquiring the lock because the window is
-                // already instantiated during the build.
-                //
-                // The mutex greatly reduces, but does not eliminate X11 window initialization
-                // errors from happening:
-                //
-                // * <https://github.com/tomaka/glutin/issues/1034> can still happen
-                // * <https://github.com/tomaka/glutin/issues/1038> may be completely removed
-                Self::build_internal(params)?.run();
-
-                drop(guard);
-            } else {
-                Self::build_internal(params)?.run();
-            }
-
-            Ok(())
+        // `CoreApplication` is `!UnwindSafe`, but wrapping it in a `Mutex` allows us to
+        // recover from a panic.
+        let application = Mutex::new(Self::build_internal(params)?);
+        panic::catch_unwind(move || {
+            application
+                .lock()
+                .expect("Expected to get application lock")
+                .run()
         })
-        .join()
-        .expect("Failed to run Amethyst application")
+        .map_err(Self::box_any_to_error)
+    }
+
+    /// Run the application in a sub thread.
+    ///
+    /// Historically this has been used for the following reasons:
+    ///
+    /// * To avoid segmentation faults using [X and mesa][mesa].
+    /// * To avoid multiple threads sharing the same memory in [Vulkan][vulkan].
+    ///
+    /// This must **NOT** be used when including the `AudioBundle` on Windows, as it causes a
+    /// [segfault][audio].
+    ///
+    /// [mesa]: <https://github.com/rust-windowing/glutin/issues/1038>
+    /// [vulkan]: <https://github.com/amethyst/rendy/issues/151>
+    /// [audio]: <https://github.com/amethyst/amethyst/issues/1595>
+    pub fn run_isolated(self) -> Result<(), Error>
+    where
+        for<'b> R: EventReader<'b, Event = E>,
+    {
+        // Acquire a lock due to memory access issues when using Rendy:
+        //
+        // See: <https://github.com/amethyst/rendy/issues/151>
+        let _guard = RENDY_MEMORY_MUTEX.lock().unwrap();
+
+        self.run()
+    }
+
+    fn box_any_to_error(error: Box<dyn Any + Send>) -> Error {
+        // Caught `panic!`s are generally `&str`s.
+        //
+        // If we get something else, we just inform the user to check the test output.
+        if let Some(inner) = error.downcast_ref::<&str>() {
+            Error::from_string(inner.to_string())
+        } else {
+            Error::from_string(
+                "Unable to detect additional information from test failure.\n\
+                 Please inspect the test output for clues.",
+            )
+        }
     }
 }
 
@@ -329,15 +283,10 @@ where
             resource_add_fns: self.resource_add_fns,
             state_fns: Vec::new(),
             state_data: PhantomData,
-            render: self.render,
         }
     }
 
     /// Adds a bundle to the list of bundles.
-    ///
-    /// **Note:** If you are adding the `RenderBundle`, you need to use `.with_bundle_fn(F)` as the
-    /// `Pipeline` type used by the bundle is `!Send`. Furthermore, you must also invoke
-    /// `.mark_render()` to avoid a race condition that causes render tests to fail.
     ///
     /// # Parameters
     ///
@@ -374,12 +323,6 @@ where
     /// This provides an alternative to `.with_bundle(B)` where `B` is `!Send`. The function that
     /// instantiates the bundle must be `Send`.
     ///
-    /// **Note:** If you are adding the `RenderBundle`, you must also invoke `.mark_render()` to
-    /// avoid a race condition that causes render tests to fail.
-    ///
-    /// **Note:** There is a `.with_render_bundle()` convenience function if you just need the
-    /// `RenderBundle` with predefined parameters.
-    ///
     /// # Parameters
     ///
     /// * `bundle_function`: Function to instantiate the Bundle.
@@ -399,48 +342,14 @@ where
     /// Registers `InputBundle` and `UiBundle` with this application.
     ///
     /// This method is provided to avoid [stringly-typed][stringly] parameters for the Input and UI
-    /// bundles. We recommended that you use strong types instead of `<String, String>`.
+    /// bundles. We recommended that you use strong types instead of `<StringBindings>`.
     ///
     /// # Type Parameters
     ///
-    /// * `AX`: Type representing the movement axis.
-    /// * `AC`: Type representing actions.
-    pub fn with_ui_bundles<AX, AC>(self) -> Self
-    where
-        AX: Hash + Eq + Clone + Send + Sync + 'static,
-        AC: Hash + Eq + Clone + Send + Sync + 'static,
-    {
-        self.with_bundle(InputBundle::<AX, AC>::new())
-            .with_bundle(UiBundle::<AX, AC>::new())
-    }
-
-    /// Registers the `RenderBundle` with this application.
-    ///
-    /// This is a convenience function that registers the `RenderBundle` using the predefined
-    /// [`display_config`][disp] and [`pipeline`][pipe].
-    ///
-    /// # Parameters
-    ///
-    /// * `title`: Window title.
-    /// * `visibility`: Whether the window should be visible.
-    ///
-    /// [disp]: #method.display_config
-    /// [pipe]: #method.pipeline
-    pub fn with_render_bundle<'name, N>(self, title: N, visibility: bool) -> Self
-    where
-        N: Into<&'name str>,
-    {
-        // TODO: We can default to the function name once this RFC is implemented:
-        // <https://github.com/rust-lang/rfcs/issues/1743>
-        // <https://github.com/rust-lang/rfcs/pull/1719>
-        let title = title.into().to_string();
-
-        let display_config = Self::display_config(title, visibility);
-        let render_bundle_fn = move || {
-            RenderBundle::new(Self::pipeline(), Some(display_config)).with_sprite_sheet_processor()
-        };
-
-        self.with_bundle_fn(render_bundle_fn).mark_render()
+    /// * `B`: Type representing the input binding types.
+    pub fn with_ui_bundles<B: BindingTypes>(self) -> Self {
+        self.with_bundle(InputBundle::<B>::new())
+            .with_bundle(UiBundle::<DefaultBackend, B>::new())
     }
 
     /// Adds a resource to the `World`.
@@ -497,6 +406,33 @@ where
             .map(|dep| dep.clone().into())
             .collect::<Vec<String>>();
         self.with_bundle_fn(move || SystemInjectionBundle::new(system, name, deps))
+    }
+
+    /// Registers a thread local `System` into this application's `GameData`.
+    ///
+    /// # Parameters
+    ///
+    /// * `system`: The thread local system.
+    pub fn with_thread_local<Sys>(self, system: Sys) -> Self
+    where
+        Sys: for<'sys_local> RunNow<'sys_local> + Send + 'static,
+    {
+        self.with_bundle_fn(move || ThreadLocalInjectionBundle::new(system))
+    }
+
+    /// Registers a thread local `System` into this application's `GameData`.
+    ///
+    /// This is a separate function in case the thread local system is `!Send`.
+    ///
+    /// # Parameters
+    ///
+    /// * `system_fn`: Function to instantiate the thread local system.
+    pub fn with_thread_local_fn<FnSysLocal, Sys>(self, system_fn: FnSysLocal) -> Self
+    where
+        FnSysLocal: FnOnce() -> Sys + Send + 'static,
+        Sys: for<'sys_local> RunNow<'sys_local> + 'static,
+    {
+        self.with_bundle_fn(move || ThreadLocalInjectionBundle::new(system_fn()))
     }
 
     /// Registers a `System` to run in a `CustomDispatcherState`.
@@ -583,83 +519,6 @@ where
     {
         self.with_fn(assertion_fn)
     }
-
-    /// Marks that this application uses the `RenderBundle`.
-    ///
-    /// **Note:** There is a `.with_render_bundle()` convenience function if you just need the
-    /// `RenderBundle` with predefined parameters.
-    ///
-    /// This is used to avoid a window initialization race condition that causes tests to fail.
-    /// See <https://github.com/tomaka/glutin/issues/1038>.
-    pub fn mark_render(mut self) -> Self {
-        self.render = true;
-        self
-    }
-
-    /// Convenience function that returns a `DisplayConfig`.
-    ///
-    /// The configuration uses the following parameters:
-    ///
-    /// * `title`: As provided.
-    /// * `fullscreen`: `false`
-    /// * `dimensions`: `Some((800, 600))`
-    /// * `min_dimensions`: `Some((400, 300))`
-    /// * `max_dimensions`: `None`
-    /// * `vsync`: `true`
-    /// * `multisampling`: `0` (disabled)
-    /// * `visibility`: As provided.
-    /// * always_on_top: false
-    /// * decorations: true
-    /// * maximized: false
-    /// * multitouch: true
-    /// * resizable: true
-    /// * transparent: true
-    ///
-    /// This is exposed to allow external crates a convenient way of obtaining display
-    /// configuration.
-    ///
-    /// # Parameters
-    ///
-    /// * `title`: Window title.
-    /// * `visibility`: Whether the window should be visible.
-    pub fn display_config(title: String, visibility: bool) -> DisplayConfig {
-        DisplayConfig {
-            title,
-            fullscreen: false,
-            dimensions: Some((SCREEN_WIDTH, SCREEN_HEIGHT)),
-            min_dimensions: Some((SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2)),
-            max_dimensions: None,
-            loaded_icon: None,
-            icon: None,
-            vsync: true,
-            multisampling: 0, // Must be multiple of 2, use 0 to disable
-            visibility,
-            always_on_top: false,
-            decorations: true,
-            maximized: false,
-            multitouch: true,
-            resizable: true,
-            transparent: true,
-        }
-    }
-
-    /// Convenience function that returns a `PipelineBuilder`.
-    ///
-    /// The pipeline is built from the following:
-    ///
-    /// * Black clear target.
-    /// * `DrawFlat2D` pass with transparency.
-    /// * `DrawUi` pass.
-    ///
-    /// This is exposed to allow external crates a convenient way of obtaining a render pipeline.
-    pub fn pipeline() -> DefaultPipeline {
-        Pipeline::build().with_stage(
-            Stage::with_backbuffer()
-                .clear_target([0., 0., 0., 0.], 0.)
-                .with_pass(DrawFlat2D::new())
-                .with_pass(DrawUi::new()),
-        )
-    }
 }
 
 #[cfg(test)]
@@ -672,62 +531,57 @@ mod test {
         ecs::prelude::*,
         error::Error,
         prelude::*,
-        renderer::ScreenDimensions,
         ui::FontAsset,
+        window::ScreenDimensions,
     };
 
     use super::AmethystApplication;
     use crate::{EffectReturn, FunctionState, PopState};
 
     #[test]
-    fn bundle_build_is_ok() {
-        assert!(AmethystApplication::blank()
-            .with_bundle(BundleZero)
-            .run()
-            .is_ok());
+    fn bundle_build_is_ok() -> Result<(), Error> {
+        AmethystApplication::blank().with_bundle(BundleZero).run()
     }
 
     #[test]
-    fn load_multiple_bundles() {
-        assert!(AmethystApplication::blank()
+    fn load_multiple_bundles() -> Result<(), Error> {
+        AmethystApplication::blank()
             .with_bundle(BundleZero)
             .with_bundle(BundleOne)
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn assertion_when_resource_is_added_succeeds() {
+    fn assertion_when_resource_is_added_succeeds() -> Result<(), Error> {
         let assertion_fn = |world: &mut World| {
             world.read_resource::<ApplicationResource>();
             world.read_resource::<ApplicationResourceNonDefault>();
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_bundle(BundleZero)
             .with_bundle(BundleOne)
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
     }
 
     #[test]
-    #[should_panic(expected = "Failed to run Amethyst application")]
+    #[should_panic] // This cannot be expect explicit because of nightly feature.
     fn assertion_when_resource_is_not_added_should_panic() {
         let assertion_fn = |world: &mut World| {
             // Panics if `ApplicationResource` was not added.
             world.read_resource::<ApplicationResource>();
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             // without BundleOne
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
+            .unwrap();
     }
 
     #[test]
-    fn assertion_switch_with_loading_state_with_add_resource_succeeds() {
+    fn assertion_switch_with_loading_state_with_add_resource_succeeds() -> Result<(), Error> {
         let state_fns = || {
             let assertion_fn = |world: &mut World| {
                 world.read_resource::<LoadResource>();
@@ -738,14 +592,11 @@ mod test {
             LoadingState::new(assertion_state)
         };
 
-        assert!(AmethystApplication::blank()
-            .with_state(state_fns)
-            .run()
-            .is_ok());
+        AmethystApplication::blank().with_state(state_fns).run()
     }
 
     #[test]
-    fn assertion_push_with_loading_state_with_add_resource_succeeds() {
+    fn assertion_push_with_loading_state_with_add_resource_succeeds() -> Result<(), Error> {
         // Alternative to embedding the `FunctionState` is to switch to a `PopState` but still
         // provide the assertion function
         let state_fns = || LoadingState::new(PopState);
@@ -753,15 +604,14 @@ mod test {
             world.read_resource::<LoadResource>();
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_state(state_fns)
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
     }
 
     #[test]
-    #[should_panic(expected = "Failed to run Amethyst application")]
+    #[should_panic] // This cannot be expect explicit because of nightly feature.
     fn assertion_switch_with_loading_state_without_add_resource_should_panic() {
         let state_fns = || {
             let assertion_fn = |world: &mut World| {
@@ -771,14 +621,14 @@ mod test {
             SwitchState::new(FunctionState::new(assertion_fn))
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_state(state_fns)
             .run()
-            .is_ok());
+            .unwrap();
     }
 
     #[test]
-    #[should_panic(expected = "Failed to run Amethyst application")]
+    #[should_panic] // This cannot be expect explicit because of nightly feature.
     fn assertion_push_with_loading_state_without_add_resource_should_panic() {
         // Alternative to embedding the `FunctionState` is to switch to a `PopState` but still
         // provide the assertion function
@@ -787,15 +637,15 @@ mod test {
             world.read_resource::<LoadResource>();
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_state(state_fns)
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
+            .unwrap();
     }
 
     #[test]
-    fn game_data_must_update_before_assertion() {
+    fn game_data_must_update_before_assertion() -> Result<(), Error> {
         let effect_fn = |world: &mut World| {
             let handles = vec![
                 AssetZeroLoader::load(world, AssetZero(10)).unwrap(),
@@ -805,23 +655,28 @@ mod test {
             world.add_resource::<Vec<AssetZeroHandle>>(handles);
         };
         let assertion_fn = |world: &mut World| {
-            let asset_zero_handles = world.read_resource::<Vec<AssetZeroHandle>>();
+            let asset_translation_zero_handles = world.read_resource::<Vec<AssetZeroHandle>>();
 
             let store = world.read_resource::<AssetStorage<AssetZero>>();
-            assert_eq!(Some(&AssetZero(10)), store.get(&asset_zero_handles[0]));
-            assert_eq!(Some(&AssetZero(20)), store.get(&asset_zero_handles[1]));
+            assert_eq!(
+                Some(&AssetZero(10)),
+                store.get(&asset_translation_zero_handles[0])
+            );
+            assert_eq!(
+                Some(&AssetZero(20)),
+                store.get(&asset_translation_zero_handles[1])
+            );
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_bundle(BundleAsset)
             .with_effect(effect_fn)
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn execution_order_is_setup_state_effect_assertion() {
+    fn execution_order_is_setup_state_effect_assertion() -> Result<(), Error> {
         struct Setup;
         let setup_fns = |world: &mut World| world.add_resource(Setup);
         let state_fns = || {
@@ -838,24 +693,26 @@ mod test {
             world.add_resource(handles);
         };
         let assertion_fn = |world: &mut World| {
-            let asset_zero_handles = world.read_resource::<Vec<AssetZeroHandle>>();
+            let asset_translation_zero_handles = world.read_resource::<Vec<AssetZeroHandle>>();
 
             let store = world.read_resource::<AssetStorage<AssetZero>>();
-            assert_eq!(Some(&AssetZero(10)), store.get(&asset_zero_handles[0]));
+            assert_eq!(
+                Some(&AssetZero(10)),
+                store.get(&asset_translation_zero_handles[0])
+            );
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_bundle(BundleAsset)
             .with_setup(setup_fns)
             .with_state(state_fns)
             .with_effect(effect_fn)
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn base_application_can_load_ui() {
+    fn base_application_can_load_ui() -> Result<(), Error> {
         let assertion_fn = |world: &mut World| {
             // Next line would panic if `UiBundle` wasn't added.
             world.read_resource::<AssetStorage<FontAsset>>();
@@ -864,44 +721,13 @@ mod test {
             world.read_resource::<ScreenDimensions>();
         };
 
-        assert!(AmethystApplication::ui_base::<String, String>()
+        AmethystApplication::ui_base::<amethyst::input::StringBindings>()
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
     }
 
     #[test]
-    #[cfg(feature = "graphics")]
-    fn render_base_application_can_load_material_animations() {
-        use crate::MaterialAnimationFixture;
-
-        assert!(AmethystApplication::render_base(
-            "render_base_application_can_load_material_animations",
-            false
-        )
-        .with_effect(MaterialAnimationFixture::effect)
-        .with_assertion(MaterialAnimationFixture::assertion)
-        .run()
-        .is_ok());
-    }
-
-    #[test]
-    #[cfg(feature = "graphics")]
-    fn render_base_application_can_load_sprite_render_animations() {
-        use crate::SpriteRenderAnimationFixture;
-
-        assert!(AmethystApplication::render_base(
-            "render_base_application_can_load_sprite_render_animations",
-            false
-        )
-        .with_effect(SpriteRenderAnimationFixture::effect)
-        .with_assertion(SpriteRenderAnimationFixture::assertion)
-        .run()
-        .is_ok());
-    }
-
-    #[test]
-    fn with_system_runs_system_every_tick() {
+    fn with_system_runs_system_every_tick() -> Result<(), Error> {
         let effect_fn = |world: &mut World| {
             let entity = world.create_entity().with(ComponentZero(0)).build();
 
@@ -909,7 +735,7 @@ mod test {
         };
 
         fn get_component_zero_value(world: &mut World) -> i32 {
-            let entity = world.read_resource::<EffectReturn<Entity>>().0.clone();
+            let entity = world.read_resource::<EffectReturn<Entity>>().0;
 
             let component_zero_storage = world.read_storage::<ComponentZero>();
             let component_zero = component_zero_storage
@@ -919,13 +745,12 @@ mod test {
             component_zero.0
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_system(SystemEffect, "system_effect", &[])
             .with_effect(effect_fn)
             .with_assertion(|world| assert_eq!(1, get_component_zero_value(world)))
             .with_assertion(|world| assert_eq!(2, get_component_zero_value(world)))
             .run()
-            .is_ok());
     }
 
     #[test]
@@ -936,9 +761,9 @@ mod test {
     }
 
     #[test]
-    fn with_system_single_runs_system_once() {
+    fn with_system_single_runs_system_once() -> Result<(), Error> {
         let assertion_fn = |world: &mut World| {
-            let entity = world.read_resource::<EffectReturn<Entity>>().0.clone();
+            let entity = world.read_resource::<EffectReturn<Entity>>().0;
 
             let component_zero_storage = world.read_storage::<ComponentZero>();
             let component_zero = component_zero_storage
@@ -949,7 +774,7 @@ mod test {
             assert_eq!(1, component_zero.0);
         };
 
-        assert!(AmethystApplication::blank()
+        AmethystApplication::blank()
             .with_setup(|world| {
                 world.register::<ComponentZero>();
 
@@ -960,15 +785,14 @@ mod test {
             .with_assertion(assertion_fn)
             .with_assertion(assertion_fn)
             .run()
-            .is_ok());
     }
 
     // Double usage tests
     // If the second call panics, then the setup functions were not executed in the right order.
 
     #[test]
-    fn with_setup_invoked_twice_should_run_in_specified_order() {
-        assert!(AmethystApplication::blank()
+    fn with_setup_invoked_twice_should_run_in_specified_order() -> Result<(), Error> {
+        AmethystApplication::blank()
             .with_setup(|world| {
                 world.add_resource(ApplicationResource);
             })
@@ -976,12 +800,11 @@ mod test {
                 world.read_resource::<ApplicationResource>();
             })
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn with_effect_invoked_twice_should_run_in_the_specified_order() {
-        assert!(AmethystApplication::blank()
+    fn with_effect_invoked_twice_should_run_in_the_specified_order() -> Result<(), Error> {
+        AmethystApplication::blank()
             .with_effect(|world| {
                 world.add_resource(ApplicationResource);
             })
@@ -989,12 +812,11 @@ mod test {
                 world.read_resource::<ApplicationResource>();
             })
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn with_assertion_invoked_twice_should_run_in_the_specified_order() {
-        assert!(AmethystApplication::blank()
+    fn with_assertion_invoked_twice_should_run_in_the_specified_order() -> Result<(), Error> {
+        AmethystApplication::blank()
             .with_assertion(|world| {
                 world.add_resource(ApplicationResource);
             })
@@ -1002,44 +824,126 @@ mod test {
                 world.read_resource::<ApplicationResource>();
             })
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn with_state_invoked_twice_should_run_in_the_specified_order() {
-        assert!(AmethystApplication::blank()
-            .with_state(|| FunctionState::new(|world| {
-                world.add_resource(ApplicationResource);
-            }))
-            .with_state(|| FunctionState::new(|world| {
-                world.read_resource::<ApplicationResource>();
-            }))
+    fn with_state_invoked_twice_should_run_in_the_specified_order() -> Result<(), Error> {
+        AmethystApplication::blank()
+            .with_state(|| {
+                FunctionState::new(|world| {
+                    world.add_resource(ApplicationResource);
+                })
+            })
+            .with_state(|| {
+                FunctionState::new(|world| {
+                    world.read_resource::<ApplicationResource>();
+                })
+            })
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn setup_can_be_invoked_after_with_state() {
-        assert!(AmethystApplication::blank()
-            .with_state(|| FunctionState::new(|world| {
-                world.add_resource(ApplicationResource);
-            }))
+    fn setup_can_be_invoked_after_with_state() -> Result<(), Error> {
+        AmethystApplication::blank()
+            .with_state(|| {
+                FunctionState::new(|world| {
+                    world.add_resource(ApplicationResource);
+                })
+            })
             .with_setup(|world| {
                 world.read_resource::<ApplicationResource>();
             })
             .run()
-            .is_ok());
     }
 
     #[test]
-    fn with_state_invoked_after_with_resource_should_work() {
-        assert!(AmethystApplication::blank()
+    fn with_state_invoked_after_with_resource_should_work() -> Result<(), Error> {
+        AmethystApplication::blank()
             .with_resource(ApplicationResource)
-            .with_state(|| FunctionState::new(|world| {
-                world.read_resource::<ApplicationResource>();
-            }))
+            .with_state(|| {
+                FunctionState::new(|world| {
+                    world.read_resource::<ApplicationResource>();
+                })
+            })
             .run()
-            .is_ok());
+    }
+
+    /// This is here because on Windows, a segmentation fault happens when:
+    ///
+    /// * There are multiple threads, each with its own sub-thread in the same application.
+    /// * One of the sub-threads initializes a COM object in a `lazy_static` variable.
+    /// * That sub-thread is joined.
+    /// * Another sub-thread accesses the COM object through the same `lazy_static` variable.
+    ///
+    /// To check this:
+    ///
+    /// ```bash
+    /// # On Windows
+    /// cd amethyst_test
+    /// cargo test --features audio
+    /// ```
+    ///
+    /// **Note:** If you simply need an audio file to be loaded, just add a `Processor::<Source>` in
+    /// the test setup:
+    ///
+    /// ```rust,ignore
+    /// use amethyst::{assets::Processor, audio::Source};
+    ///
+    /// AmethystApplication::blank()
+    ///     .with_system(Processor::<Source>::new(), "source_processor", &[])
+    ///     // ...
+    /// ```
+    ///
+    /// For more details, see <https://github.com/amethyst/amethyst/issues/1595>.
+    #[cfg(feature = "audio")]
+    mod audio_test {
+        use amethyst::{
+            assets::AssetStorage,
+            audio::{AudioBundle, Source},
+            error::Error,
+        };
+
+        use super::AmethystApplication;
+
+        #[test]
+        fn audio_zero() -> Result<(), Error> {
+            AmethystApplication::blank()
+                .with_bundle(AudioBundle::default())
+                .with_assertion(|world| {
+                    world.read_resource::<AssetStorage<Source>>();
+                })
+                .run()
+        }
+
+        #[test]
+        fn audio_one() -> Result<(), Error> {
+            AmethystApplication::blank()
+                .with_bundle(AudioBundle::default())
+                .with_assertion(|world| {
+                    world.read_resource::<AssetStorage<Source>>();
+                })
+                .run()
+        }
+
+        #[test]
+        fn audio_two() -> Result<(), Error> {
+            AmethystApplication::blank()
+                .with_bundle_fn(|| AudioBundle::default())
+                .with_assertion(|world| {
+                    world.read_resource::<AssetStorage<Source>>();
+                })
+                .run()
+        }
+
+        #[test]
+        fn audio_three() -> Result<(), Error> {
+            AmethystApplication::blank()
+                .with_bundle_fn(|| AudioBundle::default())
+                .with_assertion(|world| {
+                    world.read_resource::<AssetStorage<Source>>();
+                })
+                .run()
+        }
     }
 
     // === Resources === //
@@ -1181,7 +1085,11 @@ mod test {
     struct BundleAsset;
     impl<'a, 'b> SystemBundle<'a, 'b> for BundleAsset {
         fn build(self, builder: &mut DispatcherBuilder<'a, 'b>) -> Result<(), Error> {
-            builder.add(Processor::<AssetZero>::new(), "asset_zero_processor", &[]);
+            builder.add(
+                Processor::<AssetZero>::new(),
+                "asset_translation_zero_processor",
+                &[],
+            );
             Ok(())
         }
     }
@@ -1198,8 +1106,8 @@ mod test {
         type Storage = DenseVecStorage<Self>;
     }
     impl From<AssetZero> for Result<ProcessingState<AssetZero>, Error> {
-        fn from(asset_zero: AssetZero) -> Result<ProcessingState<AssetZero>, Error> {
-            Ok(ProcessingState::Loaded(asset_zero))
+        fn from(asset_translation_zero: AssetZero) -> Result<ProcessingState<AssetZero>, Error> {
+            Ok(ProcessingState::Loaded(asset_translation_zero))
         }
     }
     type AssetZeroHandle = Handle<AssetZero>;
@@ -1207,10 +1115,13 @@ mod test {
     // === System delegates === //
     struct AssetZeroLoader;
     impl AssetZeroLoader {
-        fn load(world: &World, asset_zero: AssetZero) -> Result<AssetZeroHandle, Error> {
+        fn load(
+            world: &World,
+            asset_translation_zero: AssetZero,
+        ) -> Result<AssetZeroHandle, Error> {
             let loader = world.read_resource::<Loader>();
             Ok(loader.load_from_data(
-                asset_zero,
+                asset_translation_zero,
                 (),
                 &world.read_resource::<AssetStorage<AssetZero>>(),
             ))

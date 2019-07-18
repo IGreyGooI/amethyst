@@ -2,19 +2,27 @@
 
 # Amethyst
 
-[![Build Status][s1]][tc] [![Crates.io][s2]][ci] [![docs page][docs-badge]][docs] [![MIT/Apache][s3]][li] [![Join us on Discord][s4]][di] ![Lines of Code][s6]
+[![Build Status][s1]][jc] [![Crates.io][s2]][ci] [![docs page][docs-badge]][docs] [![MIT/Apache][s3]][li]
+[![Join us on Discord][s4]][di]  [![Community forum][s5]][ds] [![Reddit][s7]][rd]
+[![Code coverage][s8]][cc] ![Lines of Code][s6]
 
-[s1]: https://travis-ci.org/amethyst/amethyst.svg?branch=master
+[s1]: https://jenkins.amethyst-engine.org/job/amethyst/job/master/badge/icon
 [s2]: https://img.shields.io/crates/v/amethyst.svg
 [docs-badge]: https://img.shields.io/badge/docs-website-blue.svg
-[docs]: https://www.amethyst.rs/doc/
+[docs]: https://amethyst.rs/doc/
 [s3]: https://img.shields.io/badge/license-MIT%2FApache-blue.svg
 [s4]: https://img.shields.io/discord/425678876929163284.svg?logo=discord
+[s5]: https://img.shields.io/badge/discourse-online-green.svg
 [s6]: https://tokei.rs/b1/github/amethyst/amethyst?category=code
-[tc]: https://travis-ci.org/amethyst/amethyst/
+[s7]: https://img.shields.io/badge/dynamic/json.svg?label=r/Amethyst&query=$.data.subscribers&url=https://www.reddit.com/r/Amethyst/about.json
+[s8]: https://img.shields.io/codecov/c/github/amethyst/amethyst.svg
+[jc]: https://jenkins.amethyst-engine.org/blue/organizations/jenkins/amethyst/activity/
 [ci]: https://crates.io/crates/amethyst/
 [li]: COPYING
 [di]: https://discord.gg/amethyst
+[ds]: https://community.amethyst.rs/
+[rd]: https://www.reddit.com/r/Amethyst/
+[cc]: https://codecov.io/gh/amethyst/amethyst
 
 ## What is Amethyst?
 
@@ -56,23 +64,35 @@ Please visit the [features page][feat] for a list of features Amethyst provides.
 
 ## Navigation
 
-* [**Link to the book (latest release)**][bkr]
+* [**Link to the book (0.11)**][bks11]
+* [**Link to the book (0.10)**][bks10]
 * [**Link to the book (master)**][bkm]
-* [**Link to the examples (latest release)**][exr]
+* [**Link to the examples (0.11)**][exr11]
+* [**Link to the examples (0.10)**][exr10]
 * [**Link to the examples (master)**][exm]
 
 ## Usage
 
-While the engine can be hard to use at times, we made a lot of [documentation][bkr] that will teach you everything you need to use Amethyst comfortably.
+While the engine can be hard to use at times, we made a lot of [documentation][bks11] that will teach you everything you need to use Amethyst comfortably.
 
 If you don't understand a part of the documentation, please let us know. Join us on Discord or open an issue; we are always happy to help!
 
-[bkr]: https://www.amethyst.rs/book/latest/
-[bkm]: https://www.amethyst.rs/book/master/
-[exr]: https://github.com/amethyst/amethyst/tree/v0.10.0/examples
+[bks11]: https://book.amethyst.rs/stable/
+[bks10]: https://book.amethyst.rs/v0.10.0/
+[bkm]: https://book.amethyst.rs/master/
+[exr11]: https://github.com/amethyst/amethyst/tree/v0.11.0/examples
+[exr10]: https://github.com/amethyst/amethyst/tree/v0.10.0/examples
 [exm]: https://github.com/amethyst/amethyst/tree/master/examples
 
 ## Getting started
+
+### Before you begin
+
+This repository uses Git LFS for some files used in examples.
+If you intend to run the examples, make sure you have LFS installed in your system before you clone.
+You can download it and read the installation instructions at [Git LFS home page](https://git-lfs.github.com/).
+
+### Examples
 
 To compile any of the examples run:
 
@@ -80,39 +100,58 @@ To compile any of the examples run:
 $ cargo run --example name_of_example
 ```
 
-All available examples are listed under the [examples][exr] directory.
+All available examples are listed under the [examples][exr11] directory.
 
 For a full-blown "Hello World" tutorial check out the [Getting Started][gs] chapter in the book.
 
-[gs]: https://www.amethyst.rs/book/latest/getting-started.html
+[gs]: https://book.amethyst.rs/stable/getting-started.html
 
-There are also many open source games and prototypes being made with Amethyst. See our showcase in the regularly updated [Games Made With Amethyst][gmwa] thread on the community forum for some good sources of inspiration.
+### Showcase games
 
-[gmwa]: https://community.amethyst-engine.org/t/games-made-with-amethyst/134
+Our official showcase games demonstrate larger, continuously developed game projects made with Amethyst:
+
+- [Evoli][evoli] - 3D, ecosystem simulator
+- [Space Menace][menace] - 2D, action platformer
+
+For more examples see [Games Made With Amethyst][gmwa] topic on the community forum for some good sources of inspiration.
+
+[evoli]: https://github.com/amethyst/evoli
+[menace]: https://github.com/amethyst/space-menace
+[gmwa]: https://community.amethyst.rs/t/games-made-with-amethyst/134
 
 ## Dependencies
 
 If you are compiling on Linux, make sure to install the dependencies below.
 
-Additionally, make sure you have EGL installed. Since the package depends on your drivers, we cannot list it here.
+### Arch Linux
+
+```
+$ pacman -Sy grep gcc pkgconfig openssl alsa-lib cmake make python3 freetype2 awk libxcb
+```
 
 ### Debian/Ubuntu
 
 ```
-$ sudo apt install pkg-config libasound2-dev libssl-dev cmake libfreetype6-dev libexpat1-dev libxcb-composite0-dev
+# apt install gcc pkg-config openssl libasound2-dev cmake build-essential python3 libfreetype6-dev libexpat1-dev libxcb-composite0-dev libssl-dev
 ```
 
 ### Fedora
 
 ```
-$ sudo dnf install alsa-lib-devel openssl-devel cmake freetype-devel expat-devel libxcb-devel
+# dnf install pkgconfig gcc openssl-devel alsa-lib-devel cmake make gcc-c++ freetype-devel expat-devel libxcb-devel
+```
+
+### openSUSE
+
+```
+# zypper install gcc pkg-config libopenssl-devel alsa-devel cmake gcc-c++ python3 freetype2-devel libexpat-devel libxcb-devel
 ```
 
 ### Other
 
 See your distribution-specific installation process for the equivalent dependencies.
 
-Please note that you need to have a functional graphics driver installed. If you get a panic about the renderer unable to create the context when trying to run an example, a faulty driver installation could be the issue.
+**Please note that you need to have a functional graphics driver installed. If you get a panic about the renderer unable to create the context when trying to run an example, a faulty driver installation could be the issue.**
 
 ## Building Documentation
 
@@ -171,7 +210,7 @@ If for some reason we don't have any open PRs in need of a review nor any good f
 
 ## Backers
 
-Thank you to all our backers! 🙏 [Become a backer](https://www.amethyst.rs/donate)
+Thank you to all our backers! 🙏 [Become a backer](https://amethyst.rs/donate)
 
 ## Sponsors
 

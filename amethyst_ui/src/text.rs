@@ -1,20 +1,19 @@
 //! Module holding the components related to text and text editing.
 
 use derivative::Derivative;
-use gfx_glyph::{Point, PositionedGlyph};
 use serde::{Deserialize, Serialize};
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 use winit::{ElementState, Event, MouseButton, WindowEvent};
 
 use amethyst_core::{
-    shrev::{EventChannel, ReaderId},
-    specs::prelude::{
+    ecs::prelude::{
         Component, DenseVecStorage, Join, Read, ReadExpect, ReadStorage, Resources, System,
         WriteStorage,
     },
+    shrev::{EventChannel, ReaderId},
     timing::Time,
 };
-use amethyst_renderer::ScreenDimensions;
+use amethyst_window::ScreenDimensions;
 
 use super::*;
 
@@ -46,16 +45,16 @@ pub struct UiText {
     pub line_mode: LineMode,
     /// How to align the text within its `UiTransform`.
     pub align: Anchor,
-    /// Cached FontHandle, used to detect changes to the font.
-    #[serde(skip)]
-    pub(crate) cached_font: FontHandle,
     /// Cached glyph positions, used to process mouse highlighting
-    #[derivative(Debug = "ignore")]
     #[serde(skip)]
-    pub(crate) cached_glyphs: Vec<PositionedGlyph<'static>>,
-    /// Cached `GlyphBrush` id for use in the `UiPass`.
-    #[serde(skip)]
-    pub(crate) brush_id: Option<u64>,
+    pub(crate) cached_glyphs: Vec<CachedGlyph>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CachedGlyph {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) advance_width: f32,
 }
 
 impl UiText {
@@ -76,9 +75,7 @@ impl UiText {
             password: false,
             line_mode: LineMode::Single,
             align: Anchor::Middle,
-            cached_font: font,
             cached_glyphs: Vec::new(),
-            brush_id: None,
         }
     }
 }
@@ -89,6 +86,7 @@ impl Component for UiText {
 
 /// If this component is attached to an entity with a UiText then that UiText is editable.
 /// This component also controls how that editing works.
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct TextEditing {
     /// The current editing cursor position, specified in terms of glyphs, not characters.
     pub cursor_position: isize,
@@ -137,6 +135,7 @@ impl Component for TextEditing {
 }
 
 /// This system processes the underlying UI data as needed.
+#[derive(Debug, Default)]
 pub struct TextEditingMouseSystem {
     /// A reader for winit events.
     reader: Option<ReaderId<Event>>,
@@ -212,11 +211,9 @@ impl<'a> System<'a> for TextEditingMouseSystem {
                         );
                         if self.left_mouse_button_pressed {
                             let (mouse_x, mouse_y) = self.mouse_position;
-                            text_editing.highlight_vector = closest_glyph_index_to_mouse(
-                                mouse_x,
-                                mouse_y,
-                                text.cached_glyphs.iter(),
-                            ) - text_editing.cursor_position;
+                            text_editing.highlight_vector =
+                                closest_glyph_index_to_mouse(mouse_x, mouse_y, &text.cached_glyphs)
+                                    - text_editing.cursor_position;
                             // The end of the text, while not a glyph, is still something
                             // you'll likely want to click your cursor to, so if the cursor is
                             // near the end of the text, check if we should put it at the end
@@ -246,7 +243,7 @@ impl<'a> System<'a> for TextEditingMouseSystem {
                                 text_editing.cursor_position = closest_glyph_index_to_mouse(
                                     mouse_x,
                                     mouse_y,
-                                    text.cached_glyphs.iter(),
+                                    &text.cached_glyphs,
                                 );
 
                                 // The end of the text, while not a glyph, is still something
@@ -269,7 +266,7 @@ impl<'a> System<'a> for TextEditingMouseSystem {
     }
 
     fn setup(&mut self, res: &mut Resources) {
-        use amethyst_core::specs::prelude::SystemData;
+        use amethyst_core::ecs::prelude::SystemData;
         Self::SystemData::setup(res);
         self.reader = Some(res.fetch_mut::<EventChannel<Event>>().register_reader());
     }
@@ -280,9 +277,7 @@ fn should_advance_to_end(mouse_x: f32, text_editing: &mut TextEditing, text: &mu
     let len = text.cached_glyphs.len() as isize;
     if cursor_pos + 1 == len {
         if let Some(last_glyph) = text.cached_glyphs.last() {
-            let last_glyph_x = last_glyph.position().x;
-            let advance_width = last_glyph.unpositioned().h_metrics().advance_width;
-            if mouse_x - last_glyph_x > advance_width / 2.0 {
+            if mouse_x - last_glyph.x > last_glyph.advance_width / 2.0 {
                 return true;
             }
         }
@@ -291,15 +286,15 @@ fn should_advance_to_end(mouse_x: f32, text_editing: &mut TextEditing, text: &mu
     false
 }
 
-fn closest_glyph_index_to_mouse<'a, 'b: 'a, I>(mouse_x: f32, mouse_y: f32, i: I) -> isize
-where
-    I: Iterator<Item = &'a PositionedGlyph<'b>>,
-{
-    i.enumerate()
+fn closest_glyph_index_to_mouse(mouse_x: f32, mouse_y: f32, glyphs: &[CachedGlyph]) -> isize {
+    glyphs
+        .iter()
+        .enumerate()
         .min_by(|(_, g1), (_, g2)| {
-            let dist = |g: &PositionedGlyph<'_>| {
-                let Point { x, y } = g.position();
-                ((x - mouse_x).powi(2) + (y - mouse_y).powi(2)).sqrt()
+            let dist = |g: &CachedGlyph| {
+                let dx = g.x - mouse_x;
+                let dy = g.y - mouse_y;
+                dx * dx + dy * dy
             };
             dist(g1).partial_cmp(&dist(g2)).expect("Unexpected NaN!")
         })
