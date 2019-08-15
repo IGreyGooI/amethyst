@@ -9,13 +9,13 @@
     rust_2018_compatibility
 )]
 #![warn(clippy::all)]
-#![allow(clippy::new_without_default)]
 
 use amethyst_assets::{Asset, Format, Handle};
 use amethyst_core::ecs::prelude::VecStorage;
 use amethyst_error::Error;
-use fluent::bundle::FluentBundle;
+pub use fluent::*;
 use serde::{Deserialize, Serialize};
+use unic_langid::langid;
 
 /// Loads the strings from localisation files.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -32,10 +32,14 @@ impl Format<Locale> for LocaleFormat {
     fn import_simple(&self, bytes: Vec<u8>) -> Result<Locale, Error> {
         let s = String::from_utf8(bytes)?;
 
-        let mut bundle = FluentBundle::new::<&'static str>(&[]);
+        let resource = FluentResource::try_new(s).expect("Failed to parse locale data");
+        let lang_en = langid!("en");
+        let mut bundle = FluentBundle::new(&[lang_en]);
+
         bundle
-            .add_messages(&s)
-            .expect("Error creating fluent bundle!");
+            .add_resource(resource)
+            .expect("Failed to add resource");
+
         Ok(Locale { bundle })
     }
 }
@@ -46,8 +50,8 @@ pub type LocaleHandle = Handle<Locale>;
 /// A loaded locale.
 #[allow(missing_debug_implementations)]
 pub struct Locale {
-    /// The message context.
-    pub bundle: FluentBundle<'static>,
+    /// The bundle stores its resources for now.
+    pub bundle: FluentBundle<FluentResource>,
 }
 
 impl Asset for Locale {
