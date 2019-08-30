@@ -20,18 +20,37 @@ The format is based on [Keep a Changelog][kc], and this project adheres to
 * `UiButtonData` is now exported from `amethyst_ui` and can be used for custom widgets. ([#1859])
 * Add an audio subchapter to the pong chapter. ([#1842])
 * Add `DispatcherOperation` to store dispatcher build logic, which can be executed lazily. ([#1870])
-
+* `AmethystApplication` takes in `SystemDesc`s through `with_system_desc`. ([#1882])
+* `AmethystApplication::with_thread_local_desc` takes in `RunNowDesc`. ([#1882])
+* Add `NineSlice` support to `UiImage`. ([#1896])
+* `RenderingBundle` for full manual control of the rendering pipeline via a custom `GraphCreator` ([#1839]).
 
 ### Changed
 
 * All `-Builder` structs in amethyst_ui/prefab.rs are now called `-Data`. ([#1859])
+* `AmethystApplication` takes in a `System` instead of a closure for `with_system`. ([#1882])
+* `AmethystApplication::with_thread_local` constraint relaxed to `RunNow` (previously `System`). ([#1882])
+* `SystemDesc` proc macro supports `#[system_desc(event_reader_id)]` to register event reader. ([#1883])
+* `SystemDesc` proc macro supports `#[system_desc(flagged_storage_reader(Component))]`. ([#1886])
+* `DispatcherOperation` stores system name and dependencies as `String`s. ([#1891])
+* `TextureProcessor` renamed to `TextureProcessorSystem` ([#1839]).
+* `MeshProcessor` renamed to `MeshProcessorSystem` ([#1839]).
 
 ### Fixed
+
+* `RenderingBundle` is registered last in all examples. ([#1881])
 
 [#1780]: https://github.com/amethyst/amethyst/pull/1780
 [#1859]: https://github.com/amethyst/amethyst/pull/1859
 [#1842]: https://github.com/amethyst/amethyst/pull/1842
 [#1870]: https://github.com/amethyst/amethyst/pull/1870
+[#1881]: https://github.com/amethyst/amethyst/pull/1881
+[#1882]: https://github.com/amethyst/amethyst/pull/1882
+[#1883]: https://github.com/amethyst/amethyst/pull/1883
+[#1886]: https://github.com/amethyst/amethyst/pull/1886
+[#1891]: https://github.com/amethyst/amethyst/pull/1891
+[#1896]: https://github.com/amethyst/amethyst/pull/1896
+[#1839]: https://github.com/amethyst/amethyst/pull/1839
 
 ## [0.12.0] - 2019-07-30
 
